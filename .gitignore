@@ -1,0 +1,16 @@
+# Credentials: never commit
+*.key
+*.pem
+*.p12
+.env
+.env.*
+!.env.example
+auth.json
+*credentials*
+*secret*
+*.token
+
+# Tooling
+node_modules/
+.DS_Store
+*.log
