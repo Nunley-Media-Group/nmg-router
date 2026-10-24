@@ -1,0 +1,75 @@
+**Issue**: #1
+**Date**: 2026-10-24
+**Status**: Approved
+**Author**: Rich Nunley
+
+# File: tests/features/mod-foundation.feature
+# Generated from: specs/1-lay-the-mod-foundation-with-the-anthropic-guard-and-os-keyring-credentials/requirements.md
+Feature: Mod foundation with the Anthropic guard and OS keyring credentials
+
+  @SCN001
+  Scenario: Clean checkout type-checks and tests
+    Given a clean checkout with Claude Code installed and the folder trusted
+    When the developer runs "npm run types:sync", "npm run typecheck" and "npm test"
+    Then ".claude-plugin/types/" is laid by the installed Claude Code, is ignored by git, and both commands pass
+
+  @SCN002
+  Scenario: Manifests mirror VERSION
+    Given VERSION contains "0.1.0"
+    When package.json, .claude-plugin/plugin.json and hooks/hooks.json are read
+    Then both manifests declare "0.1.0", hooks.json lists "./register.ts", and "claude plugin validate ." passes
+
+  @SCN003
+  Scenario: Anthropic request refused before any transport call
+    Given a routed request for model "clinepass/claude-sonnet-5-5"
+    When the guarded send checks it
+    Then it is refused naming "clinepass/claude-sonnet-5-5" and no transport, HTTP or process call is made
+
+  @SCN004
+  Scenario: Spike fallback response is rejected
+    Given a transport that answers "opencode-go/kimi-k3.1-pro" with model "anthropic/claude-opus-5-5"
+    When the guarded send checks the response
+    Then it rejects naming both models, returns no content, and the transport was called once
+
+  @SCN005
+  Scenario: Anthropic provider registration rejected
+    Given the provider registry
+    When a provider with id "anthropic" or base URL "https://api.anthropic.com" is registered
+    Then registration is rejected and the provider is not listed
+
+  @SCN006
+  Scenario Outline: Credentials round-trip through each OS keyring
+    Given a faked <platform> host with a working keyring
+    When a credential for "opencode-go" is saved, read and deleted
+    Then <tool> is used with service "nmg-router", the read returns the value, the delete removes it, and the secret is in no argv or env
+
+    Examples:
+      | platform | tool           |
+      | macos    | security       |
+      | windows  | powershell.exe |
+      | linux    | secret-tool    |
+
+  @SCN007
+  Scenario: No keyring uses the encrypted vault and keyring failures are refused
+    Given a host with no supported keyring
+    When a credential is saved and read
+    Then it round-trips through an owner-only AES-256-GCM vault whose files hold no plaintext
+    And a locked or failing keyring instead raises a typed error naming platform and provider with nothing written
+
+  @SCN008
+  Scenario: Anthropic credential never stored
+    Given a save request for provider "anthropic"
+    When the store receives it
+    Then it is refused and no keyring tool runs and no vault file is touched
+
+  @SCN009
+  Scenario: Hygiene checks hold
+    Given the repository and a sentinel secret driven through the store
+    When the test suite runs
+    Then the gitleaks workflow triggers on push and pull_request, the sentinel appears in no recorded output, and no credential-shaped value exists under tests/fixtures
+
+  @SCN010
+  Scenario: README explains credential security
+    Given the repository README
+    When its "Credential security" section is read
+    Then it covers keyring storage per OS, the vault's file-permission protection, per-OS vault paths and the hardening and removal steps
