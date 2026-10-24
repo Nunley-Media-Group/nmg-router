@@ -17,3 +17,6 @@ node_modules/
 .DS_Store
 *.log
 .nmg-sdlc/
+
+# Generated mod type declarations (npm run types:sync)
+.claude-plugin/types/

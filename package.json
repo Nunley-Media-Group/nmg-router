@@ -1,0 +1,21 @@
+{
+  "name": "nmg-router",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code mod that routes non-Claude models through their own provider credentials",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "types:sync": "node scripts/sync-mod-types.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7",
+    "yaml": "^2.9.1"
+  }
+}
