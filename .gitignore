@@ -6,7 +6,9 @@
 .env.*
 !.env.example
 auth.json
-*credentials*
+credentials.json
+.credentials.json
+*.credentials
 *secret*
 *.token
 
