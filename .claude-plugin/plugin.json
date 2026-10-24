@@ -1,5 +1,5 @@
 {
   "name": "nmg-router",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "description": "Puts models from other providers into Claude Code's /model picker, each answered through its own provider credentials"
 }

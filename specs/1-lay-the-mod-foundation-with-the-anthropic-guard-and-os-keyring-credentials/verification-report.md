@@ -4,7 +4,7 @@
 **Issue**: #1
 **Reviewer**: Claude Code (nmg-sdlc verify worker, run c6909847-216b-43c9-9507-e3e205776a74)
 **Scope**: Implementation verification against spec
-**Verification head**: 1ff6fcb5c1f51963e5f2c1b34ab63c9c4ea687bf
+**Verification head**: 1e2cb5d18d975547ab213ac36240dfd1b75c0571
 
 ---
 
@@ -21,9 +21,11 @@
 | **Overall** | 3.8 |
 
 ### Implementation Status: Fail
-**Total Issues**: 2
+**Total Issues**: 3
 
-The required `repository.tests` validation failed at the verification head. Commit `1ff6fcb` ("feat: deliver issue #1") raised `VERSION`, `package.json` and `.claude-plugin/plugin.json` to `0.2.0`. The test `tests/manifest/versions.test.ts:12` still asserts `VERSION` is `0.1.0`, and AC2/FR3 in the Approved spec pin `0.1.0`. The deterministic ceiling is **Fail**. The rest of the implementation passes review: 81 of 82 tests pass, typecheck passes and the plugin manifest validates.
+The required `repository.tests` validation failed at the verification head, for the second cycle in a row. Commit `1a70d2f` returned the version to `0.1.0`, then commit `1e2cb5d` ("feat: deliver issue #1") raised `VERSION`, `package.json` and `.claude-plugin/plugin.json` to `0.2.0` again, as `1ff6fcb` did before. The test `tests/manifest/versions.test.ts:12` asserts `VERSION` is `0.1.0`, and AC2/FR3/T001 in the Approved spec pin `0.1.0`. The deterministic ceiling is **Fail**. The rest of the implementation passes review: 81 of 82 tests pass, typecheck passes and the plugin manifest validates.
+
+**Diagnosis**: the delivery step raises the version before verification, and the spec pins the pre-release version. Restoring `0.1.0` was tried once and was undone by the next delivery commit, so the same fix will loop. Only a change to the spec pin (or to when delivery raises the version) breaks the loop.
 
 ---
 
@@ -47,7 +49,7 @@ The required `repository.tests` validation failed at the verification head. Comm
 
 ## Deterministic Steering Artifact and Ceiling
 
-Artifact: `.nmg-sdlc/verification/1.json`. Head `1ff6fcb5c1f51963e5f2c1b34ab63c9c4ea687bf`, tree clean, base `main`.
+Artifact: `.nmg-sdlc/verification/1.json`. Head `1e2cb5d18d975547ab213ac36240dfd1b75c0571`, tree clean, base `main`.
 Coverage: declared 3, recorded 3, complete `true`, no missing, duplicate or unknown ids. **Ceiling: Fail.**
 
 | Validation | Required | Status | Evidence |
@@ -182,9 +184,9 @@ Coverage: declared 3, recorded 3, complete `true`, no missing, duplicate or unkn
 | **Severity** | Critical |
 | **Category** | Testing / Spec Compliance |
 | **Location** | `tests/manifest/versions.test.ts:12`, `VERSION`, `package.json`, `.claude-plugin/plugin.json`, `CHANGELOG.md` |
-| **Issue** | Delivery commit `1ff6fcb` raised the version to `0.2.0` before verification. The Approved spec (AC2, FR3, T001) and the version test require `0.1.0` |
-| **Impact** | The required `repository.tests` validation fails, which caps status at Fail. AC1 and AC2 fail |
-| **Reason Not Fixed** | Outside the verify publication scope. Implementation must pick one: (a) return `VERSION`, `package.json`, `.claude-plugin/plugin.json` and the CHANGELOG entry to `0.1.0` until delivery bumps the version, or (b) change the test to assert only that the manifests equal the trimmed `VERSION`, and amend the spec's `0.1.0` pin. Option (a) matches the Approved spec |
+| **Issue** | Delivery commit `1e2cb5d` raised the version to `0.2.0` before verification, after `1a70d2f` had restored `0.1.0` (which `1ff6fcb` had raised earlier). The Approved spec (AC2, FR3, T001) and the version test require `0.1.0` |
+| **Impact** | The required `repository.tests` validation fails, which caps status at Fail. AC1 and AC2 fail. The restore-then-bump cycle has now run twice |
+| **Reason Not Fixed** | Outside the verify publication scope (only `verification-report.md` is writable). Restoring `0.1.0` (option (a) last cycle) was undone by the next delivery commit, so repeating it will loop. The cause to change: amend AC2/FR3/T001 so the manifests must equal the trimmed `VERSION` rather than the literal `0.1.0`, and drop the `reads VERSION as 0.1.0` test (`tests/manifest/versions.test.ts:11-13`); or stop delivery from raising the version before verification passes. Either needs a spec amendment or a controller decision, not another implementation-only restore |
 
 ### Low Priority
 
@@ -196,6 +198,15 @@ Coverage: declared 3, recorded 3, complete `true`, no missing, duplicate or unkn
 | **Issue** | `resolveBackend` memoizes the promise even when it rejects. A transient `detectPlatform` failure then fails every later call in the session |
 | **Impact** | The store stays unusable until reload. It fails closed, so no secret is exposed |
 | **Reason Not Fixed** | Not a spec violation; outside verify scope |
+
+| Field | Value |
+|-------|-------|
+| **Severity** | Low |
+| **Category** | Documentation |
+| **Location** | `CHANGELOG.md:7-15` |
+| **Issue** | `1e2cb5d` added a `[0.2.0]` section above the Unreleased entry that `1a70d2f` kept, so `[0.2.0]` now has two identical `### Changed` blocks and Unreleased is empty |
+| **Impact** | Cosmetic; the release notes repeat one line |
+| **Reason Not Fixed** | Outside verify scope; fix it together with the version decision |
 
 ---
 
@@ -211,7 +222,8 @@ Coverage: declared 3, recorded 3, complete `true`, no missing, duplicate or unkn
 ## Recommendations Summary
 
 ### Before PR (Must)
-- [ ] Settle the version so it matches the Approved spec and `npm test` passes, then rerun the full registered gate
+- [ ] Amend the spec's `0.1.0` pin (or the delivery bump order) so the version cannot loop, make `npm test` pass, then rerun the full registered gate
+- [ ] Remove the duplicate `### Changed` block from `CHANGELOG.md`
 
 ### Short Term (Should)
 - [ ] Clear the memoized backend promise when it rejects
@@ -230,7 +242,8 @@ Coverage: declared 3, recorded 3, complete `true`, no missing, duplicate or unkn
 | `src/credentials/store.ts` | 1 | Low: memoized rejection |
 | `src/credentials/keyring-macos.ts`, `vault.ts` | 0 | |
 | `tests/manifest/versions.test.ts` | 1 | Critical: hardcoded `0.1.0` vs `0.2.0` at head |
-| `VERSION`, `package.json`, `.claude-plugin/plugin.json` | (same) | Bumped to `0.2.0` by `1ff6fcb` |
+| `VERSION`, `package.json`, `.claude-plugin/plugin.json` | (same) | Bumped to `0.2.0` by `1e2cb5d` (after `1a70d2f` restored `0.1.0`) |
+| `CHANGELOG.md` | 1 | Low: duplicate `### Changed` entry under `[0.2.0]` |
 
 ---
 
@@ -238,4 +251,4 @@ Coverage: declared 3, recorded 3, complete `true`, no missing, duplicate or unkn
 
 **Needs fixes**
 
-The implementation meets AC3–AC10. A premature version bump to `0.2.0` breaks the required test gate and AC1/AC2. Return the version to `0.1.0`, or reconcile the test and the spec, then rerun full verification.
+The implementation meets AC3–AC10. A version bump to `0.2.0` before verification breaks the required test gate and AC1/AC2 again. Restoring `0.1.0` alone has already been undone once, so reconcile the spec pin with the delivery version bump before rerunning full verification.

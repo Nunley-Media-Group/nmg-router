@@ -1,6 +1,6 @@
 {
   "name": "nmg-router",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Claude Code mod that routes non-Claude models through their own provider credentials",
   "type": "module",

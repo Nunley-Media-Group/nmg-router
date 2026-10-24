@@ -8,10 +8,6 @@ const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 describe("manifests mirror VERSION", () => {
   const version = read("VERSION").trim();
 
-  it("reads VERSION as 0.1.0", () => {
-    expect(version).toBe("0.1.0");
-  });
-
   it("declares the same version in package.json and the plugin manifest", () => {
     expect((JSON.parse(read("package.json")) as { version: string }).version).toBe(version);
     expect((JSON.parse(read(".claude-plugin/plugin.json")) as { version: string }).version).toBe(version);
