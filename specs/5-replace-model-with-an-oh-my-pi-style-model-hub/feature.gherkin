@@ -1,0 +1,57 @@
+**Issue**: #5
+**Date**: 2026-10-25
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/2-add-the-provider-catalog-with-provider-aware-login-and-logout/
+
+# File: tests/features/model-hub.feature
+# Generated from: specs/5-replace-model-with-an-oh-my-pi-style-model-hub/requirements.md
+Feature: oh-my-pi-style model hub for /model
+
+  @SCN001
+  Scenario: Hub lists Claude and logged-in providers, then dimmed ones
+    Given stored logins for OpenCode Go and Codex, and xAI not logged in
+    When the user runs "/model"
+    Then the hub shows "All models", Claude, OpenCode Go and Codex with counts, then a dimmed xAI entry
+
+  @SCN002
+  Scenario: Rows and the detail line show capabilities
+    Given the hub is open on OpenCode Go
+    When a row is highlighted
+    Then the row shows id, current mark, context, price and speed, and the detail line shows name, context, max out, price, reasoning and vision
+
+  @SCN003
+  Scenario: Search ranks matches across providers
+    Given the hub is open
+    When the user types "kimi"
+    Then matching models are listed by match quality then recent use, and entries without matches are dimmed and cannot be chosen
+
+  @SCN004
+  Scenario: Selecting a model switches it and keeps the conversation
+    Given a conversation on a Claude model
+    When the user selects "opencode-go/kimi-k3.1-pro" and later "opus"
+    Then each pick runs Claude Code's own /model switch for that id
+
+  @SCN005
+  Scenario: A provider without credentials hands off to login
+    Given the dimmed xAI entry
+    When the user presses Enter and then "Log in to xAI"
+    Then the pane shows xAI has no credentials with its catalog preview, the login flow runs, and the hub reopens on xAI
+
+  @SCN006
+  Scenario: Arguments switch directly, first open refreshes, and Esc clears then closes
+    Given "/model opus"
+    When the command runs, and later the hub opens a provider and Esc is pressed twice with a search typed
+    Then the switch runs without the hub, the provider refreshes once, the first Esc clears the search and the second closes the hub
+
+  @SCN007
+  Scenario: A smaller context window compacts before switching
+    Given a transcript larger than a routed model's context window
+    When the user selects that model
+    Then its row showed a context-too-large mark, the session compacts, and then the model switches
+
+  @SCN008
+  Scenario: Settings rows follow the catalog
+    Given discovered routed models and a settings file with the user's own rows
+    When the catalog refreshes
+    Then modelPicker.options keeps the user's rows and adds one provider-labeled row per enabled routed model
