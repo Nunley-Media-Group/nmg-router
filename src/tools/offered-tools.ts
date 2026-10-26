@@ -34,18 +34,29 @@ export function searchLoadedTools(messages: readonly ApiMessageInput[]): string[
   return names;
 }
 
+// Whether the host has given this loop SubagentHandback. The host never lists the
+// tool to a mod, but where it runs one (a subagent in auto mode on 2.1.311) it tells
+// the subagent so in a reminder of its own: a top-level user text block naming the
+// tool. Outside auto mode the host has no such tool, and a call to it fails.
+export function hostOffersHandback(messages: readonly ApiMessageInput[]): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "user" &&
+      message.content.some((block) => block.type === "text" && typeof block.text === "string" && block.text.includes(SUBAGENT_HANDBACK)),
+  );
+}
+
 // The names a routed step offers, deduplicated in order: the captured names, the
 // tools the loop loaded through ToolSearch, then SubagentHandback in a subagent's
-// loop. The host's tool listing is the session's and never names SubagentHandback,
-// so a subagent step is offered it by its agent id alone. The main loop has no
-// caller to hand back to, so it is never offered SubagentHandback.
+// loop whose host reminder names it. Any other loop, the main loop included, is
+// never offered SubagentHandback.
 export function offeredToolNames(
   captured: readonly string[],
   messages: readonly ApiMessageInput[],
   agentId: string | undefined,
 ): string[] {
   const names = new Set([...captured, ...searchLoadedTools(messages)]);
-  if (agentId !== undefined) names.add(SUBAGENT_HANDBACK);
+  if (agentId !== undefined && hostOffersHandback(messages)) names.add(SUBAGENT_HANDBACK);
   else names.delete(SUBAGENT_HANDBACK);
   return [...names];
 }

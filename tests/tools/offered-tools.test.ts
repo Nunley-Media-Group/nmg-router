@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolInfo } from "claude-code";
-import { offeredToolNames, offeredTools, searchLoadedTools } from "../../src/tools/offered-tools.ts";
+import { hostOffersHandback, offeredToolNames, offeredTools, searchLoadedTools } from "../../src/tools/offered-tools.ts";
 import { BUILTIN_TOOL_SCHEMAS } from "../../src/tools/builtin-schemas.ts";
 import {
   SUBAGENT_HANDBACK,
@@ -49,6 +49,12 @@ const SEARCHED: ApiMessageInput[] = [
   { role: "user", content: [{ type: "tool_result", tool_use_id: "search_1", content: [{ type: "tool_reference", tool_name: "WebFetch" }] }] },
 ];
 
+// The host's reminder that a subagent's report goes through SubagentHandback, as auto mode adds it on 2.1.311.
+const REMINDER: ApiMessageInput = {
+  role: "user",
+  content: [{ type: "text", text: "Your final report is delivered through SubagentHandback." }],
+};
+
 // The session's tool listing, as 2.1.310 and 2.1.311 answer `$.tool.list()` in any
 // loop: SubagentHandback is never in it.
 const HOST_TOOLS: ToolInfo[] = [
@@ -59,17 +65,30 @@ const HOST_TOOLS: ToolInfo[] = [
 // AC3, FR8: routed requests offer SubagentHandback in a subagent loop and the tools ToolSearch loaded.
 describe("offered tool names", () => {
   it("adds the ToolSearch-loaded tools and, in a subagent loop, SubagentHandback, deduplicated in order", () => {
-    expect(offeredToolNames(["Read", "WebFetch"], SEARCHED, "agent-1")).toEqual(["Read", "WebFetch", SUBAGENT_HANDBACK]);
-    expect(offeredToolNames(["Read"], SEARCHED, "agent-1")).toEqual(["Read", "WebFetch", SUBAGENT_HANDBACK]);
+    expect(offeredToolNames(["Read", "WebFetch"], [REMINDER, ...SEARCHED], "agent-1")).toEqual(["Read", "WebFetch", SUBAGENT_HANDBACK]);
+    expect(offeredToolNames(["Read"], [REMINDER, ...SEARCHED], "agent-1")).toEqual(["Read", "WebFetch", SUBAGENT_HANDBACK]);
   });
 
   it("never offers SubagentHandback to the main loop, even when a capture named it", () => {
-    expect(offeredToolNames(["Read", SUBAGENT_HANDBACK], [], undefined)).toEqual(["Read"]);
+    expect(offeredToolNames(["Read", SUBAGENT_HANDBACK], [REMINDER], undefined)).toEqual(["Read"]);
   });
 
-  it("offers SubagentHandback to a subagent by its agent id, though the host never lists it", () => {
+  it("offers SubagentHandback to a subagent whose host reminder names it, though the host never lists it", () => {
     expect(HOST_TOOLS.some((tool) => tool.name === SUBAGENT_HANDBACK)).toBe(false);
-    expect(offeredToolNames(["Read"], [], "agent-1")).toEqual(["Read", SUBAGENT_HANDBACK]);
+    expect(offeredToolNames(["Read"], [REMINDER], "agent-1")).toEqual(["Read", SUBAGENT_HANDBACK]);
+  });
+
+  it("does not offer SubagentHandback to a subagent the host gave none, as outside auto mode", () => {
+    expect(offeredToolNames(["Read", SUBAGENT_HANDBACK], SEARCHED, "agent-1")).toEqual(["Read", "WebFetch"]);
+  });
+
+  it("reads the reminder only from user text, not the model's own text or a tool result", () => {
+    const echoed: ApiMessageInput[] = [
+      { role: "assistant", content: [{ type: "text", text: "I will call SubagentHandback." }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "read_1", content: [{ type: "text", text: "SubagentHandback" }] }] },
+    ];
+    expect(hostOffersHandback(echoed)).toBe(false);
+    expect(hostOffersHandback([REMINDER])).toBe(true);
   });
 
   it("reads tool_reference blocks only from ToolSearch results", () => {

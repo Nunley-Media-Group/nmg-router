@@ -1,4 +1,5 @@
 import { MAIN_LOOP, type SessionTracker } from "../routing/session-tracker.ts";
+import { SUBAGENT_HANDBACK } from "../tools/supplement-schemas.ts";
 import type { Approver, AskPerson } from "./person-approval.ts";
 import type { PermissionModeTracker } from "./permission-mode.ts";
 import { policyFor, type Decision, type PolicyHost } from "./policy.ts";
@@ -38,7 +39,10 @@ export type ToolCheckDeps = {
 export type ToolCheckNext = ((call: ToolCall) => Promise<ToolVerdict>) & { readonly signal?: AbortSignal | undefined };
 
 // A routed call is one whose tool id the routed steps emitted, in auto mode.
+// SubagentHandback is the host's own: on 2.1.311 only the auto-mode classifier can
+// allow it, and the host refuses a hook's allow, so its verdict is left to core.
 function isRoutedAuto(deps: Pick<ToolCheckDeps, "tracker" | "mode">, call: ToolCall): boolean {
+  if (call.tool === SUBAGENT_HANDBACK) return false;
   return call.tool_use_id !== undefined && deps.tracker.isRoutedTool(call.tool_use_id) && deps.mode.isAuto();
 }
 

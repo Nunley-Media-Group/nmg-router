@@ -3,7 +3,7 @@ import { routeStep } from "../../src/routing/turn-step.ts";
 import type { TurnStepResult } from "claude-code";
 import type { ApiMessageInput } from "../../src/translate/messages.ts";
 import { CHAT_URL, MODEL, SESSION, chatTurn, collect, harness, postsTo, remember, replies, signIn, spyNext, step, textOf, userText } from "../support/routing.ts";
-import { deliverHandback } from "../support/fake-turn.ts";
+import { HANDBACK_REMINDER, deliverHandback } from "../support/fake-turn.ts";
 
 const CLAUDE = "claude-sonnet-5-5";
 
@@ -68,9 +68,10 @@ const HOST_TOOLS = [
   { name: "WebFetch", description: "Fetch a page", mcp: false },
 ];
 
-// A subagent transcript that loaded WebFetch through ToolSearch.
+// An auto-mode subagent transcript, with the host's handback reminder, that loaded WebFetch through ToolSearch.
 const SUB_TRANSCRIPT: ApiMessageInput[] = [
   userText("Sub task"),
+  userText(HANDBACK_REMINDER),
   { role: "assistant", content: [{ type: "tool_use", id: "search_1", name: "ToolSearch", input: { query: "select:WebFetch" } }] },
   { role: "user", content: [{ type: "tool_result", tool_use_id: "search_1", content: [{ type: "tool_reference", tool_name: "WebFetch" }] }] },
 ];
@@ -101,15 +102,31 @@ describe("routed subagent tools", () => {
     const handback = (JSON.parse(body ?? "{}") as OfferedBody).tools?.find((tool) => tool.function.name === "SubagentHandback");
     expect(handback?.function.description).toContain("Deliver your final report to the agent that spawned you");
     const toolUses = (result as TurnStepResult).toolUses;
-    expect(deliverHandback(toolUses, main as never)).toBe(true);
+    expect(deliverHandback(toolUses, main as never, { autoMode: true })).toBe(true);
     expect(JSON.stringify(main)).toContain("The notes are fixed.");
+  });
+
+  it("does not offer SubagentHandback where the host gave the subagent none, so its plain report is delivered", async () => {
+    const h = harness({
+      http: replies(chatTurn({ text: "Sub done." })),
+      tools: HOST_TOOLS,
+      session: { id: SESSION, messages: [userText("Main task")], agents: { "agent-1": [userText("Sub task")] } },
+    });
+    await signIn(h.engine);
+    remember(h.capture, MODEL, "CAPTURED PROMPT", ["Read"]);
+
+    const { chunks, result } = await collect(routeStep(h.router, step(0, MODEL, { agentId: "agent-1" }), spyNext()));
+
+    expect(offeredNames(postsTo(h.engine, CHAT_URL)[0]?.body)).toEqual(["Read"]);
+    expect((result as TurnStepResult).toolUses).toEqual([]);
+    expect(textOf(chunks)).toBe("Sub done.");
   });
 
   it("offers SubagentHandback to a routed subagent under a Claude main loop, with no capture for its model", async () => {
     const h = harness({
       http: replies(chatTurn({ text: "Sub." })),
       tools: HOST_TOOLS,
-      session: { id: SESSION, messages: [userText("Main task")], agents: { "agent-1": [userText("Sub task")] } },
+      session: { id: SESSION, messages: [userText("Main task")], agents: { "agent-1": [userText("Sub task"), userText(HANDBACK_REMINDER)] } },
     });
     await signIn(h.engine);
 

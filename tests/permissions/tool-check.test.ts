@@ -4,7 +4,7 @@ import { createPermissionModeTracker, type PermissionModeTracker } from "../../s
 import type { PermissionMode } from "../../src/permissions/mode.ts";
 import { routeStep } from "../../src/routing/turn-step.ts";
 import { CHAT_URL, chatTurn, collect, harness, postsTo, remember, replies, signIn, spyNext, step } from "../support/routing.ts";
-import { autoModeOutcome, toolCall, toolNext } from "../support/fake-turn.ts";
+import { autoModeOutcome, deliverHandback, toolCall, toolNext } from "../support/fake-turn.ts";
 import { ALLOWED, NOT_ALLOWED, createPersonApproval } from "../../src/permissions/person-approval.ts";
 import type { FakeOptions } from "../support/fake-engine.ts";
 
@@ -168,6 +168,40 @@ describe("the permission mode", () => {
 
     tracker.observe({ permission_mode: "plan" });
     expect(tracker.isAuto()).toBe(false);
+  });
+});
+
+// AC3, FR8: on 2.1.311 only the auto-mode classifier can allow SubagentHandback, and the host refuses a
+// hook's allow, so a routed subagent's handback keeps core's verdict and nobody is asked.
+describe("a routed subagent's SubagentHandback in auto mode", () => {
+  const handback = { name: "SubagentHandback", input: { message: "The notes are fixed." } };
+
+  it.each<PermissionMode>(["claude-classifier", "server-classifier-off"])("keeps core's verdict in %s mode, and its report reaches the caller", async (policy) => {
+    const { h, deps } = autoFixture({ classify: "allow", ask: "Allow" }, policy);
+    const core: ToolVerdict = { decision: "ask" };
+    const caller: { role: "user" | "assistant"; content: { type: string; text: string }[] }[] = [];
+
+    const checked = await checkRoutedTool(
+      deps,
+      toolCall({ tool: "SubagentHandback", input: handback.input, tool_use_id: ROUTED_CALL, agentId: "agent-1" }),
+      toolNext(core),
+    );
+
+    expect(checked).toBe(core);
+    expect(h.engine.recorded.classifications).toEqual([]);
+    expect(h.engine.recorded.asks).toEqual([]);
+    expect(deliverHandback([handback], caller, { autoMode: true, checked, core })).toBe(true);
+    expect(JSON.stringify(caller)).toContain("The notes are fixed.");
+  });
+
+  it("is refused by the host when a hook answers it, as the earlier plugin allow was", () => {
+    const core: ToolVerdict = { decision: "ask" };
+    expect(deliverHandback([handback], [], { autoMode: true, checked: { ...ALLOWED }, core })).toBe(false);
+  });
+
+  it("is left to the engine when its check fails", () => {
+    const { deps } = autoFixture();
+    expect(checkFailed(deps, toolCall({ tool: "SubagentHandback", tool_use_id: ROUTED_CALL, agentId: "agent-1" }))).toBeUndefined();
   });
 });
 

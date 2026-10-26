@@ -3,8 +3,8 @@
 **Date**: 2026-10-26
 **Issue**: #4
 **Reviewer**: Claude Code (nmg-sdlc verify worker, run 18ba375d-2a4d-434c-9c7f-831c62d550e8)
-**Scope**: Implementation verification against the amended spec
-**Verification head**: da53ffed6295b3d0ae219446b306e48de7f0977e
+**Scope**: Re-verification of the H1 fix (`7cec36a`) against the amended spec
+**Verification head**: 7cec36a1453012182fdbb1a77494ded05bd4bb44
 
 ---
 
@@ -17,15 +17,15 @@
 | Security | 4 |
 | Performance | 4 |
 | Testability | 3 |
-| Error Handling | 4 |
-| **Overall** | 3.7 |
+| Error Handling | 3 |
+| **Overall** | 3.5 |
 
 ### Implementation Status: Fail
-**Total Issues**: 4 (1 High, 1 Medium, 2 Low)
+**Total Issues**: 7 (1 High, 3 Medium, 3 Low)
 
-`da53ffe` implements T009–T013. The registered gate is fully green: typecheck passes, 436/436 tests pass, and `claude plugin validate .` passes. The live herdr run on Claude Code v2.1.311 confirms the H1 and H3 fixes. The in-place summary goes to the provider and never to Anthropic, and the routed request then carries only the summary and the newer messages. A routed Bash call in auto mode gets nmg-router's own question, and Allow, Deny and dismissal each behave as specified. The Claude classifier allows and denies, and rules and non-auto modes pass through unchanged.
+`7cec36a` offers `SubagentHandback` to every routed subagent step by its agent id. The registered gate was fully green at this head: typecheck, `npm test` and `claude plugin validate .` all passed. The live herdr run on Claude Code v2.1.311 shows the routed subagent is now offered `SubagentHandback` (`handback=true`), and it calls the tool.
 
-H2 is **not fixed live**. A routed subagent started from a Claude main loop is never offered `SubagentHandback`, so its report never reaches the caller: the host nudged it three times, and it ended with `end_turn`, `lastToolUseId=none`. Its requests also carry the main loop's system prompt and tool set instead of the subagent's own. The unit fakes model a host that the live 2.1.311 host doesn't match, so the suite passes while AC3 fails.
+AC3 still **fails live**. In auto mode, the handback reaches `tool.check`, and nmg-router answers it with a plugin `allow`, from either the Claude classifier or the person. The host refuses every one of these: *"Only the auto-mode classifier can allow SubagentHandback: an allow of type 'hook' is not the classifier's verdict"*. The report never reaches the caller. The subagent loops through the host's `handback-send-enforce` nudges, and the person also gets an nmg-router question for an internal handback. Outside auto mode, the host has no `SubagentHandback` in the subagent loop, so the offered tool fails with "No such tool available". The caller then gets the subagent's plain final text.
 
 ---
 
@@ -49,12 +49,12 @@ H2 is **not fixed live**. A routed subagent started from a Claude main loop is n
 
 ## Deterministic Steering Artifact and Ceiling
 
-`sdlc-verify-steering.mjs --base main --controller-run-id 18ba375d-2a4d-434c-9c7f-831c62d550e8` wrote `.nmg-sdlc/verification/4.json` with `ok: true` and `ceiling: null`. Coverage: declared 3, recorded 3, complete, with no missing, duplicate or unknown results. Identity: head `da53ffed…`, steering `sha256:75b22afe…`, spec `sha256:13340e31…`, tree clean.
+`sdlc-verify-steering.mjs --base main --controller-run-id 18ba375d-2a4d-434c-9c7f-831c62d550e8` wrote `.nmg-sdlc/verification/4.json` with `ok: true` and `ceiling: null`. Coverage: declared 3, recorded 3, complete, with no missing, duplicate or unknown results. Identity: head `7cec36a1…`, steering `sha256:75b22afe…`, spec `sha256:13340e31…`, tree clean.
 
 | Validation | Provider | Required | Status | Evidence |
 |------------|----------|----------|--------|----------|
 | repository.typecheck | builtin.command | yes | passed | `npm run typecheck` exited 0 |
-| repository.tests | builtin.command | yes | passed | `npm test`: 436 passed (436) |
+| repository.tests | builtin.command | yes | passed | `npm test` exited 0 (see M2: after the verify session started, one schema-registry test fails) |
 | repository.plugin-manifest | builtin.command | yes | passed | `claude plugin validate .` exited 0 |
 
 There is no deterministic ceiling. The overall Fail comes from the interactive verification that the project's verification steering requires.
@@ -63,16 +63,18 @@ There is no deterministic ceiling. The overall Fail comes from the interactive v
 
 ## Acceptance Criteria Verification
 
+`7cec36a` changes only `src/tools/offered-tools.ts`, `src/tools/supplement-schemas.ts`, a one-line call in `src/routing/router.ts`, the regenerated `builtin-schemas.ts`, and tests. The compaction, mode and permission code paths are the same as at `da53ffe`, where AC1, AC2 and AC4–AC8 passed live. This run re-exercised AC3 only, since the result is Fail either way.
+
 | AC | Description | Status | Evidence |
 |----|-------------|--------|----------|
-| AC1 | Routed compaction | Pass | `src/compaction/compact-hook.ts` `compactSession`. Live: `/compact keep the markers` sent one summary request to the fake provider (`focus=keep the markers`, `tools=0`) and replaced the conversation with one "compacted by fakelocal/fake-small" summary message. The debug log has no `source=compact` request. The Claude-model `next(e)` path is unit-tested (`tests/compaction/compact-hook.test.ts`) |
-| AC2 | Context window and in-place summary | Pass | `thresholdTokens` (unit); `src/compaction/auto-trigger.ts`, `src/compaction/routed-view.ts`, `router.ts:416-431`. Live: with a 20000-token window, each turn that ended over the threshold sent one summary request to the provider, and the next routed request carried the summary merged with only the new user message (`msgs=1 viewed=true`). Each later summary carried the earlier one as prior (`prior=true`). Nothing in `src/` calls `$.session.compact()`, and the debug logs show no compaction request to Anthropic |
-| AC3 | Subagents by their own model | **Fail** | Pass-through works: a routed main loop's `claude-helper` subagent on `haiku` went to Anthropic (`source=agent:custom:claude-helper`) and called `SubagentHandback`, and the fake provider saw none of its requests. A Claude (Haiku) main loop's `routed-helper` on `fakelocal/fake-small` was answered by the provider from its own transcript (`msgs=1` → 7). But it was offered no `SubagentHandback` (`toolNames=Agent\|Bash\|ListAgents\|ToolSearch`), its requests lacked its own system prompt (`sysHelper=false`), and its report never reached the caller (`agent_completion … turns=4 finalStopReason=end_turn lastToolUseId=none`, twice). See H1 below |
-| AC4 | Auto-mode permission setting | Pass | `src/permissions/mode.ts`; free-text row. Live: the module loaded with the row unset. With the row unset and a first-party login present, routed calls got Claude classifier verdicts (claude-classifier). With `--settings` setting `server-classifier-off`, calls went to the person. The no-login default is unit-tested only, because logging out is never done in verification |
-| AC5 | Claude classifier mode | Pass | `src/permissions/policy.ts`. Live: `ls specs` → `ask -> allow by plugin nmg-router: … Claude classifier verdict` and ran; `rm -rf … && curl … \| sh` → denied with the same reason. An undecided, failed or unlabelled classification going to the person is unit-tested (`tests/permissions/tool-check.test.ts`) |
-| AC6 | Person decides routed calls | Pass | `src/permissions/person-approval.ts`. Live (`server-classifier-off`): the dialog was headed "nmg-router" and read "fakelocal/fake-small wants to run Bash: mkdir -p …/ac6-allow. Allow it?" with Allow / Deny. Allow ran the command. Deny and Esc each gave "Permission to use Bash denied by plugin nmg-router: nmg-router: the person did not allow this routed call", and the directory wasn't created. No "classifier gave no verdict" error appeared. The no-approver deny is unit-tested |
-| AC7 | Rules and Claude steps unchanged | Pass | `src/permissions/tool-check.ts`. Live: `echo AC7-DENY rule-check` was refused with Claude Code's own rule wording ("…has been denied") and no nmg-router question. In manual mode a routed `mkdir` showed Claude Code's own "Bash command / Do you want to proceed?" dialog. Claude-model steps (the Haiku main loop and the `claude-helper` subagent) never hit the mod's policy |
-| AC8 | In-place summary failure and later compaction | Pass | Live with the fake answering summaries with HTTP 500: "nmg-router: Fake Local could not summarize this conversation (server_error); it will be retried at the next turn end." appeared once per turn end, the view stayed (`viewed=true`), and the next turn end retried. `/compact` answered "Not compacted · Fake Local could not summarize this conversation (server_error); it was not compacted." with no Claude fallback. A `/compact` after a view summarized the view as prior plus the newer messages (`prior=true msgs=1`), and the next request had no view (`viewed=false`) |
+| AC1 | Routed compaction | Pass (carried) | `src/compaction/compact-hook.ts`; live at `da53ffe`. The code is unchanged since |
+| AC2 | Context window and in-place summary | Pass (carried) | `src/compaction/auto-trigger.ts`, `routed-view.ts`; live at `da53ffe`. The code is unchanged since |
+| AC3 | Subagents by their own model | **Fail** | `offeredToolNames` now adds `SubagentHandback` on `e.agentId` (`src/tools/offered-tools.ts:42-51`). Live: the fake provider saw `handback=true … toolNames=…\|SubagentHandback`, and the routed subagent called it. In auto mode, the host refused each plugin allow (`Only the auto-mode classifier can allow SubagentHandback: an allow of type 'hook' is not the classifier's verdict`, 8 of 8 calls), and the caller got no report (`agent_completion … turns=8 finalStopReason=end_turn`). In manual mode the tool doesn't exist in the subagent loop (`No such tool available: SubagentHandback`), and the caller got the plain final text. The Claude-subagent pass-through and the unchanged status line were confirmed at `da53ffe`. See H1 and M1 |
+| AC4 | Auto-mode permission setting | Pass (carried) | `src/permissions/mode.ts`. This run: the module loaded with the row unset (`hooks module nmg-router@inline loaded`), and the routed calls used the Claude classifier (`Claude classifier verdict for a routed call`) |
+| AC5 | Claude classifier mode | Pass (carried) | `src/permissions/policy.ts`. This run: the classifier left the first `SubagentHandback` undecided, so the call was put to the person, as specified |
+| AC6 | Person decides routed calls | Pass (carried) | This run: the dialog read "nmg-router │ fakelocal/fake-small wants to run SubagentHandback: {…}. Allow it?", and Allow gave `allow by plugin nmg-router: … the person allowed this routed call`. The host then rejected that allow for this one tool (H1) |
+| AC7 | Rules and Claude steps unchanged | Pass (carried) | `src/permissions/tool-check.ts`; live at `da53ffe`. The code is unchanged since |
+| AC8 | In-place summary failure and later compaction | Pass (carried) | Live at `da53ffe`. The code is unchanged since |
 
 ---
 
@@ -80,17 +82,13 @@ There is no deterministic ceiling. The overall Fail comes from the interactive v
 
 | Task | Status | Notes |
 |------|--------|-------|
-| T001–T002 | Complete | Tracker, router, summary request, prompt, threshold |
-| T003 | Complete | No `$.session.compact()` in `src/`; in-place trigger; compaction over the view drops it |
-| T004 | Complete | Policies never return `ask`; `.catch` → `deny` |
-| T005 | Complete | `hooks/register.ts` wires the view, `askPerson` and the new deps |
-| T006 | Partial | Fakes assume the session `$.tool.list()` names `SubagentHandback` for a subagent step and that `prompt.compose` captures the subagent's own prompt. The live 2.1.311 host does neither for the routed subagent |
-| T007–T008 | Complete | Unit coverage present and passing |
-| T009 | Complete | `src/compaction/routed-view.ts`; verified live |
-| T010 | **Incomplete** | `src/tools/supplement-schemas.ts` exists and `offeredToolNames` is implemented, but live a routed subagent is not offered `SubagentHandback` (AC3) |
-| T011 | Complete | `src/permissions/person-approval.ts`; verified live |
-| T012 | Partial | The in-place summary probe and the person-approval probe pass. The handback probe fails |
-| T013 | Complete | Tests exist and pass, but the AC3 test passes against a fake that diverges from the host |
+| T001–T005 | Complete | Unchanged since `da53ffe` |
+| T006 | Partial | Fakes now follow the host listing (no `SubagentHandback`). They still don't model the host rejecting a hook allow for `SubagentHandback` in auto mode, or the tool being absent outside auto mode (M3) |
+| T007–T009 | Complete | — |
+| T010 | **Incomplete** | `SubagentHandback` is offered, but the report doesn't reach the caller in auto mode (H1). Outside auto mode it is offered when the host doesn't have it (M1) |
+| T011 | Complete | `src/permissions/person-approval.ts` |
+| T012 | Partial | The handback probe still fails |
+| T013 | Complete | Tests exist and pass at the gate. The AC3 tests pass against a host contract that differs from 2.1.311 |
 
 ---
 
@@ -98,20 +96,20 @@ There is no deterministic ceiling. The overall Fail comes from the interactive v
 
 | Area | Score | Key findings |
 |------|-------|--------------|
-| SOLID | 4 | One concern per module (`routed-view`, `person-approval`, `supplement-schemas`). `register.ts` stays thin, and policies remain a strategy. `RouterHost` keeps growing to carry `ui.ask`, which only the permission path uses |
-| Security | 4 | No routed transcript reaches Anthropic through compaction (H1 fixed). Only the login handle's presence is read. A dismissed or failed check denies. The classifier text still embeds the raw tool input (a follow-up already out of scope) |
-| Performance | 4 | One summary request per crossing, deferred past turn end. The routed step waits only for a pending summary. `searchLoadedTools` scans the transcript on every step, which is linear and acceptable |
-| Testability | 3 | Pure functions and ports throughout. But the handback fake encodes an assumed host contract, and the live host contradicts it (H1 below) |
-| Error handling | 4 | Failures answer `{ skip }`, a one-line log or `deny`, never a Claude fallback. The in-place summary has no deadline of its own (L1) |
+| SOLID | 4 | One concern per module. `SUPPLEMENT_TOOL_DESCRIPTIONS` sits beside the supplement schemas. `offeredToolNames` lost its unused `listed` parameter |
+| Security | 4 | Nothing new reaches Anthropic. The `SubagentHandback` dialog shows the full report as tool input, which is data and is fine. The classifier text still embeds raw tool input (an out-of-scope follow-up) |
+| Performance | 4 | No new cost. The failed-handback loop costs eight routed requests and seven Claude classifications per subagent run (H1) |
+| Testability | 3 | The AC3 fake still diverges from the live host (M3). The byte-for-byte schema test depends on gitignored declarations the host rewrites at session start (M2) |
+| Error handling | 3 | A refused handback is answered `allow` again on every retry, with no recognition that the host will never accept it. Outside auto mode, an unavailable tool is offered (M1) |
 
 ---
 
 ## Test Results
 
-- `npm run typecheck`: pass
-- `npm test`: pass, 436/436
+- `npm run typecheck`: pass (registered gate)
+- `npm test`: pass (registered gate, before the verify session). A rerun after `claude --plugin-dir .` started: 438 passed and 1 failed (`tests/tools/builtin-schemas.test.ts` "matches a fresh regeneration … byte for byte"), because the host rewrote `.claude-plugin/types/claude-code-tools/index.d.ts` at 17:16:47 with an extra `Artifact.edits` parameter (M2)
 - `claude plugin validate .`: pass
-- BDD: `feature.gherkin` SCN001–SCN008 map to Vitest suites. All pass at unit level, and SCN003 fails live
+- BDD: SCN001–SCN008 map to Vitest suites and pass at unit level. SCN003 fails live
 
 ---
 
@@ -120,42 +118,38 @@ There is no deterministic ceiling. The overall Fail comes from the interactive v
 | Field | Value |
 |-------|-------|
 | **Host** | Claude Code v2.1.311 (Claude Max login) |
-| **Method** | `herdr tab create --cwd <repo> --label verify-4 --no-focus`; `herdr agent start verify-4 --kind claude --pane <pane> -- --plugin-dir . --model fakelocal/fake-small --permission-mode auto [--settings off.json] --agents <json> --debug-file <log>` |
-| **Provider** | Local scripted fake OpenAI-compatible HTTPS server (`fakelocal`, 20000-token window, no credentials). It reports 5000 prompt tokens per turn, so every turn crosses the 3616-token threshold. It can emit Bash, Agent and `SubagentHandback` tool calls on cue |
+| **Method** | `herdr tab create --cwd <repo> --label verify-4 --no-focus`; `herdr agent start verify-4 --kind claude --pane <pane> -- --plugin-dir . --model haiku --permission-mode auto\|default --agents <json> --debug-file <log>` |
+| **Provider** | Local scripted fake OpenAI-compatible HTTPS server (`fakelocal/fake-small`, no credentials). It calls `SubagentHandback` whenever that tool is offered |
+| **Subagents** | `routed-helper` on `fakelocal/fake-small`, and `claude-helper` on `haiku` |
 | **Dialogs** | No folder-trust or load errors; `hooks module nmg-router@inline loaded` |
 
 | # | Prompt | Observed | Excerpt |
 |---|--------|----------|---------|
-| 1 | `Hello, remember MARK-1`, then MARK-2, MARK-3 | One summary per turn end on the provider. The next request carried the summary plus only the new message | `FAKE-REPLY msgs=1 viewed=true` |
-| 2 | `/compact keep the markers` | One provider summary with focus and prior, and one summary message | `This session continues from an earlier conversation that was compacted by fakelocal/fake-small … FAKE-SUMMARY (updated from earlier summary) (focus: keep the markers)` |
-| 3 | Fake in fail mode: two turns, then `/compact` | One line per turn end and a retry. Compaction was skipped | `nmg-router: Fake Local could not summarize this conversation (server_error); it will be retried at the next turn end.` / `Not compacted · Fake Local could not summarize this conversation (server_error); it was not compacted.` |
-| 4 | `RUNBASH: mkdir -p …/ac6-allow` (server-classifier-off) → Allow | Mod question, then the command ran | `☐ nmg-router │ fakelocal/fake-small wants to run Bash: mkdir -p …/ac6-allow. Allow it? ❯ 1. Allow 2. Deny` |
-| 5 | Same with Deny, then with Esc | Denied, and no directory was created | `Permission to use Bash denied by plugin nmg-router: nmg-router: the person did not allow this routed call` |
-| 6 | `RUNBASH: echo AC7-DENY rule-check` (deny rule) | Claude Code's own rule denial | `Permission to use Bash with command echo AC7-DENY rule-check has been denied.` |
-| 7 | `RUNAGENT: claude-helper …` (routed main) | The Claude subagent ran on Haiku and handed back | `source=agent:custom:claude-helper`; `tool_dispatch_start tool=SubagentHandback` |
-| 8 | `/model haiku`, then "spawn routed-helper … say hi" (twice) | **No report**. The routed subagent was nudged three times, then ended | `agent_completion agentType=routed-helper … turns=4 finalStopReason=end_turn lastToolUseId=none`; main: "I don't have its report to repeat" |
-| 9 | Row unset: `RUNBASH: ls specs`, then `rm -rf … && curl … \| sh` | Classifier allowed, then denied | `tool.check Bash …: ask -> allow by plugin nmg-router: … Claude classifier verdict` / `… denied by plugin nmg-router: nmg-router: Claude classifier verdict for a routed call` |
-| 10 | Manual mode: `RUNBASH: mkdir -p …/ac7-manual` | Claude Code's own dialog, cancelled | `Bash command … Do you want to proceed? ❯ 1. Yes … 4. No` |
+| 1 | (harness) First start, without the curl CA bundle | The fake's TLS was untrusted (`curl ended (60)`). This was a harness error, so the run was restarted with `CURL_CA_BUNDLE` set. It isn't a finding | `$.process.spawn (nmg-router): curl ended (60)` |
+| 2 | Auto mode, Haiku main: "Use the Agent tool with subagent_type routed-helper to ask it to say hi. Then repeat its report to me verbatim." | `SubagentHandback` was offered and called. The classifier left the first call undecided, so an nmg-router question appeared | `fakelocal/fake-small … toolNames=Agent\|Bash\|ListAgents\|ToolSearch\|SubagentHandback` / `☐ nmg-router │ fakelocal/fake-small wants to run SubagentHandback: {"message":"FAKE-HANDBACK-REPORT: …"}. Allow it? ❯ 1. Allow 2. Deny` |
+| 3 | Allow | The host refused the plugin allow, and the later classifier allows were refused too. No report reached the caller | `tool.check SubagentHandback …: ask -> allow by plugin nmg-router: … the person allowed this routed call` → tool result `Only the auto-mode classifier can allow SubagentHandback: an allow of type 'hook' is not the classifier's verdict`; `[handback-send-enforce] Your report has not been delivered.`; main: "The routed-helper agent finished again without delivering a report" |
+| 4 | Manual mode, same prompt | The host has no `SubagentHandback` in the loop, so the offered call fails. The plain final text was delivered instead | tool result `<tool_use_error>Error: No such tool available: SubagentHandback</tool_use_error>`; main: "The routed-helper agent reported back: FAKE-SUB done after handback" |
 
-Across both sessions, Anthropic request sources were only `quota_check`, `generate_session_title`, `prompt_suggestion`, `side_query` and the Claude subagent/main-loop requests. There was no `compact` source.
-
-`/model fakelocal/fake-small` from the picker answered "Model not found". Routed model selection belongs to #2/#5 and is not judged here. The `/model haiku` step changed the user's default `model` setting, which this run restored to its prior value (`opus`). Both tabs were closed and the fake server was stopped.
+The tab was closed, the fake server was stopped, and the user's default `model` setting is unchanged (`opus`).
 
 ---
 
 ## Fixes Applied
 
-None. The verify publication scope allows writes only to this report.
+None. The verify publication scope allows writes only to this report. During this run, a `--help` probe of `scripts/gen-tool-schemas.mjs` regenerated `src/tools/builtin-schemas.ts`. That change was reverted with `git checkout`, and the tree is clean at `7cec36a`.
 
 ## Remaining Issues
 
 | ID | Severity | Category | Location | Issue | Reason not fixed |
 |----|----------|----------|----------|-------|------------------|
-| H1 | High | Correctness | `src/tools/offered-tools.ts:48-49`, `src/routing/compose-capture.ts:22,27`, `src/routing/router.ts:416,426` | A routed subagent is not offered `SubagentHandback`, so its report never reaches the caller (AC3, FR8). Its requests carry the main loop's system prompt and tools, not its own. Likely cause, from the live evidence: the capture is keyed only by model, so the subagent reads the last main-loop render of that model; and `offeredToolNames` deletes `SubagentHandback` unless the session-level `$.tool.list()` names it, which it doesn't on 2.1.311. Diagnose with a live probe of `prompt.compose` (`agentId`, `tools`) and `$.tool.list()` during a subagent step. Key the capture by loop, and offer `SubagentHandback` on `e.agentId` alone | Outside verify scope; implementation change |
-| M1 | Medium | Testability | `tests/support/fake-turn.ts:63-70`, `tests/routing/subagents.test.ts:65` | The fakes list `SubagentHandback` in the session tool listing, and the captured prompt follows the agent, so the AC3 test passes against a host contract the live host doesn't have | Outside verify scope |
-| L1 | Low | Error handling | `src/compaction/auto-trigger.ts:53` | The in-place summary uses a never-aborted signal and has no deadline. A provider that stalls after connecting holds the next routed main-loop step until the person interrupts it | Outside verify scope |
-| L2 | Low | UX | status line | After a `/model` switch to Claude, the routed status line (`⚠ nmg-router: fakelocal/fake-small · thinking unsupported`) stays visible. #3 behavior, not an AC here | Outside verify scope |
+| H1 | High | Correctness | `src/permissions/tool-check.ts`, `src/permissions/policy.ts`, `src/permissions/person-approval.ts` | In auto mode, a routed subagent's `SubagentHandback` is routed through the mod's policy and answered with a plugin `allow`. Claude Code 2.1.311 accepts only the auto-mode classifier's own verdict for this tool, so every handback is refused and the report never reaches the caller (AC3, FR8). The person also gets an nmg-router question for an internal call. Diagnose with a live probe of what the host does for a routed `SubagentHandback` when `tool.check` returns `next(e)` unchanged. Decide whether `SubagentHandback` must bypass the routed-call policy, and whether the server classifier then answers it | Outside verify scope; implementation change |
+| M1 | Medium | Correctness | `src/tools/offered-tools.ts:42-51` | `SubagentHandback` is offered on `e.agentId` alone, but outside auto mode the host has no such tool in the subagent loop. Each routed subagent run then makes one failing call ("No such tool available") before its plain text is delivered. In auto mode, the subagent transcript carries the host's "Your final report is delivered through SubagentHandback" reminder. A host-sourced signal like that could gate the offer | Outside verify scope |
+| M2 | Medium | Testability | `tests/tools/builtin-schemas.test.ts`, `.claude-plugin/types/claude-code-tools/index.d.ts` | The byte-for-byte registry test compares the committed `builtin-schemas.ts` with the gitignored declarations, which the host rewrites on every `claude --plugin-dir .` start using account- or session-gated tool parameters. After the verify session started, `npm test` failed 1 of 439 (`Artifact.edits`). The registered gate passed only because it ran first | Outside verify scope |
+| M3 | Medium | Testability | `tests/support/fake-turn.ts`, `tests/routing/subagents.test.ts`, `tests/permissions/tool-check.test.ts` | The fakes deliver a handback whenever it is called. They don't model the host's refusal of a hook allow for `SubagentHandback` in auto mode, or the tool's absence outside auto mode, so the AC3 suite passes while the feature fails live | Outside verify scope |
+| L1 | Low | Error handling | `src/compaction/auto-trigger.ts:53` | Carried: the in-place summary has no deadline of its own | Outside verify scope |
+| L2 | Low | UX | status line | Carried: the routed status line stays after a `/model` switch to Claude (#3 behavior) | Outside verify scope |
+| L3 | Low | Spec drift | `design.md` § offered tools item 3, `tasks.md` T010 | The spec still says `SubagentHandback` is offered "when the host's tool listing names it", but `7cec36a` offers it on the agent id alone. A routed subagent's requests also carry the latest main-loop render for its model, not its own definition prompt (`sysHelper=false`). This matches the design's per-model capture, but the subagent never sees its definition prompt. Amend the spec with the H1 fix | Spec files are read-only in verify scope |
 
 ## Recommendation
 
-**Needs fixes.** Return to implementation for H1, with a host-faithful fake (M1). Then rerun the full registered gate and the herdr procedure, including a Claude main loop with a routed subagent whose report reaches the caller.
+**Needs fixes.** Return to implementation for H1 and M1, with host-faithful fakes (M3), and make the schema test independent of the host's per-session declarations (M2). Then rerun the full registered gate and the herdr procedure. In auto mode and in manual mode, a Claude main loop's routed subagent must deliver its `SubagentHandback` report to the caller without an nmg-router question.

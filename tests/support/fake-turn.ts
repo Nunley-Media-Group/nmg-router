@@ -60,16 +60,25 @@ export function compactNext(signal: AbortSignal = new AbortController().signal):
   return Object.assign(next, { signal, calls });
 }
 
-// The host's SubagentHandback, as 2.1.310 and 2.1.311 run it: a subagent's call
-// with a non-empty `message` delivers that report into its caller's transcript,
-// though the tool is never in the session listing a mod reads. Answers whether a
-// report was delivered.
+// The reminder the host puts in a subagent's transcript where it runs SubagentHandback
+// (auto mode on 2.1.311). Outside auto mode the host has no such tool and adds none.
+export const HANDBACK_REMINDER = "Your final report is delivered through SubagentHandback. Call it once, when your work is complete.";
+
+// The host's SubagentHandback, as 2.1.311 runs it. Outside auto mode the tool does
+// not exist, and a call fails with "No such tool available". In auto mode only the
+// auto-mode classifier can allow it: a verdict a tool.check hook made, rather than
+// core's verdict handed up as it came, is refused. Otherwise a call with a
+// non-empty `message` delivers that report into its caller's transcript. Answers
+// whether a report was delivered.
 export function deliverHandback(
   toolUses: readonly { readonly name: string; readonly input: unknown }[],
   caller: { role: "user" | "assistant"; content: { type: string; [field: string]: unknown }[] }[],
+  host: { readonly autoMode: boolean; readonly checked?: ToolVerdict; readonly core?: ToolVerdict } = { autoMode: true },
 ): boolean {
   const call = toolUses.find((use) => use.name === "SubagentHandback");
-  const message = (call?.input as { message?: unknown } | undefined)?.message;
+  if (call === undefined || !host.autoMode) return false;
+  if (host.checked !== host.core || host.checked?.decision === "deny") return false;
+  const message = (call.input as { message?: unknown } | undefined)?.message;
   if (typeof message !== "string" || message.trim() === "") return false;
   caller.push({ role: "user", content: [{ type: "text", text: message }] });
   return true;
