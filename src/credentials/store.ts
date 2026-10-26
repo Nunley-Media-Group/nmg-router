@@ -1,10 +1,7 @@
 import type { EngineInterface } from "claude-code";
 import { isAnthropicProvider } from "../gateway/anthropic.ts";
-import { CredentialError, NoKeyringError } from "../errors/errors.ts";
-import { createLinuxKeyring } from "./keyring-linux.ts";
-import { createMacosKeyring } from "./keyring-macos.ts";
-import { createWindowsKeyring } from "./keyring-windows.ts";
-import { detectPlatform, type CredentialBackend, type Platform } from "./platform.ts";
+import { CredentialError } from "../errors/errors.ts";
+import { detectPlatform, type CredentialBackend } from "./platform.ts";
 import { createVault } from "./vault.ts";
 
 export type CredentialStoreDeps = Pick<EngineInterface, "env" | "fs" | "process" | "store">;
@@ -31,44 +28,6 @@ function refuseAnthropic(provider: string): void {
   if (isAnthropicProvider(provider)) throw new CredentialError("anthropic_refused");
 }
 
-function keyringFor(platform: Platform, deps: CredentialStoreDeps): CredentialBackend | undefined {
-  switch (platform) {
-    case "macos":
-      return createMacosKeyring(deps);
-    case "windows":
-      return createWindowsKeyring(deps);
-    case "linux":
-      return createLinuxKeyring(deps);
-    case "other":
-      return undefined;
-  }
-}
-
-// Uses the keyring when the platform has one. A keyring that reports no service
-// moves the store to the vault for the rest of its life. A locked or failing
-// keyring raises its error and never reaches the vault.
-function routeThrough(keyring: CredentialBackend | undefined, vault: CredentialBackend): CredentialBackend {
-  let useVault = keyring === undefined;
-
-  async function call<T>(operation: (backend: CredentialBackend) => Promise<T>): Promise<T> {
-    if (!useVault && keyring !== undefined) {
-      try {
-        return await operation(keyring);
-      } catch (error) {
-        if (!(error instanceof NoKeyringError)) throw error;
-        useVault = true;
-      }
-    }
-    return operation(vault);
-  }
-
-  return {
-    save: (provider, account, secret) => call((backend) => backend.save(provider, account, secret)),
-    read: (provider, account) => call((backend) => backend.read(provider, account)),
-    delete: (provider, account) => call((backend) => backend.delete(provider, account)),
-  };
-}
-
 function isStoredCredential(value: unknown): value is StoredCredential {
   return (
     typeof value === "object" &&
@@ -82,9 +41,7 @@ export function createCredentialStore(deps: CredentialStoreDeps): CredentialStor
   // The backend is chosen once per store, on first use.
   let backend: Promise<CredentialBackend> | undefined;
   const resolve = (): Promise<CredentialBackend> => {
-    backend ??= detectPlatform(deps).then((platform) =>
-      routeThrough(keyringFor(platform, deps), createVault(deps, platform)),
-    );
+    backend ??= detectPlatform(deps).then((platform) => createVault(deps, platform));
     return backend;
   };
 
