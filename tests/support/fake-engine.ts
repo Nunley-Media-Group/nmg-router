@@ -1,4 +1,4 @@
-import type { EngineInterface, ProcessRunInit, ProcessRunResult } from "claude-code";
+import type { CommandRunArgs, EngineInterface, ProcessRunInit, ProcessRunResult } from "claude-code";
 
 export type FakePlatform = "macos" | "windows" | "linux" | "other";
 
@@ -52,13 +52,14 @@ export type Recorded = {
   readonly panes: FakePaneOpen[];
   readonly paneCloses: string[];
   readonly telemetry: string[];
+  readonly commands: CommandRunArgs[];
   // Every process run and file write, in the order the code made them.
   readonly events: string[];
 };
 
 export type FakeEngine = Pick<
   EngineInterface,
-  "env" | "fs" | "http" | "process" | "session" | "settings" | "store" | "telemetry" | "ui"
+  "command" | "env" | "fs" | "http" | "process" | "session" | "settings" | "store" | "telemetry" | "ui"
 > & { readonly recorded: Recorded };
 
 const HOME: Record<FakePlatform, string> = {
@@ -178,6 +179,7 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     panes: [],
     paneCloses: [],
     telemetry: [],
+    commands: [],
     events: [],
   };
   const env: Record<string, string | undefined> = { ...defaultEnv(options.platform), ...options.env };
@@ -203,6 +205,12 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
 
   const engine = {
     recorded,
+    command: {
+      run: async (input: CommandRunArgs) => {
+        recorded.commands.push(input);
+        return {};
+      },
+    },
     env: {
       get: async (name: string) => env[name],
       set: async () => ({}),

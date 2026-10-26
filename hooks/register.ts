@@ -1,5 +1,6 @@
 import type { Register } from "claude-code";
 import type { HostPort } from "../src/host.ts";
+import { createCommandFlows, type FlowHost } from "../src/login/command-flow.ts";
 import { handleLogin } from "../src/login/login-command.ts";
 import { handleLogout } from "../src/login/logout-command.ts";
 import { createPaneController, PANE_ID } from "../src/login/pane.ts";
@@ -9,6 +10,7 @@ import { createServices } from "../src/services.ts";
 // or path only where it is written literally at a call site, so the port spells
 // out each environment name and store key the mod uses. One pane serves the
 // engine: a command opens it, and the render and close hooks draw it and settle it.
+// The command hook answers at once and the flow runs after it (command-flow.ts).
 
 function unknownName(kind: string, name: string): Error {
   return new Error(`nmg-router does not use the ${kind} "${name}"`);
@@ -16,9 +18,11 @@ function unknownName(kind: string, name: string): Error {
 
 export const register: Register = (on) => {
   const pane = createPaneController();
+  const flows = createCommandFlows();
 
   on("command.run", ($, e, next) => {
     if (e.command !== "login" && e.command !== "logout") return next(e);
+    if (flows.isHandoff(e)) return next(e);
     const port: HostPort = {
       env: {
         get: (name) => {
@@ -100,9 +104,31 @@ export const register: Register = (on) => {
         invalidate: (event) => $.ui.invalidate(event),
       },
     };
+    const flowHost: FlowHost = {
+      ui: port.ui,
+      command: {
+        run: (input) => {
+          switch (input.command) {
+            case "login":
+              return $.command.run({ command: "login", args: input.args ?? "" });
+            case "logout":
+              return $.command.run({ command: "logout", args: input.args ?? "" });
+            default:
+              throw unknownName("command", input.command);
+          }
+        },
+      },
+    };
     const services = createServices(port, { pane });
-    return e.command === "login" ? handleLogin(port, e, next, services) : handleLogout(port, e, next, services);
-  });
+    return flows.start(flowHost, e, (handoff) =>
+      e.command === "login" ? handleLogin(port, e, handoff, services) : handleLogout(port, e, handoff, services),
+    );
+  }).catch((_, e, next) =>
+    // A failed /logout must never fall through to Claude Code's own, which signs the person out of Claude.
+    next.called || (e.command !== "login" && e.command !== "logout")
+      ? next(e)
+      : { text: `/${e.command} could not start. Nothing was changed.` },
+  );
 
   on("ui.render", { component: "Pane", requestId: PANE_ID }, ($, e, next) => {
     if (e.surface !== "terminal") return next(e);
