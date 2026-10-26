@@ -9,6 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "tools:schemas": "node scripts/gen-tool-schemas.mjs",
     "types:sync": "node scripts/sync-mod-types.mjs"
   },
   "devDependencies": {

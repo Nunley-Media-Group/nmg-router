@@ -1,4 +1,16 @@
-import type { CommandRunArgs, EngineInterface, ProcessRunInit, ProcessRunResult } from "claude-code";
+import type {
+  CommandRunArgs,
+  EngineInterface,
+  HookStream,
+  ProcessRunInit,
+  ProcessRunResult,
+  ProcessSpawnChunk,
+  ProcessSpawnRequest,
+  ProcessSpawnResult,
+  PromptComposeResult,
+  ToolInfo,
+} from "claude-code";
+import type { ApiMessageInput } from "../../src/translate/messages.ts";
 
 export type FakePlatform = "macos" | "windows" | "linux" | "other";
 
@@ -14,6 +26,21 @@ export type FakeOptions = {
   readonly http?: FakeHttpResponder;
   // The terminal's width, for the host's pane placement rule. Wide by default.
   readonly columns?: number;
+  // The child a `process.spawn` call runs. Undefined means curl is absent.
+  readonly spawn?: (request: ProcessSpawnRequest) => ScriptedChild | undefined;
+  readonly session?: { readonly id?: string; readonly messages?: ApiMessageInput[] | "deny" };
+  readonly compose?: PromptComposeResult;
+  readonly tools?: readonly ToolInfo[];
+  // The plugin's directory. Its manifest is read from `files`.
+  readonly pluginRoot?: string;
+};
+
+// A scripted child: stdout pieces in order, then an exit code. `hang` keeps it
+// running after its pieces, until `return()` ends it.
+export type ScriptedChild = {
+  readonly pieces: readonly string[];
+  readonly code?: number;
+  readonly hang?: boolean;
 };
 
 export type FakeHttpRequest = {
@@ -27,6 +54,8 @@ export type FakeHttpReply = {
   readonly status: number;
   readonly body?: unknown;
   readonly text?: string;
+  // Lowercase header names, as the host returns them.
+  readonly headers?: Record<string, string>;
 };
 
 export type FakeHttpResponder = (request: FakeHttpRequest) => FakeHttpReply | undefined;
@@ -51,6 +80,8 @@ export type Recorded = {
   // Each element key the mod moved a pane's focus ring onto.
   readonly focus: string[];
   readonly telemetry: string[];
+  readonly status: string[];
+  readonly debug: string[];
   readonly commands: CommandRunArgs[];
   // Every process run and file write, in the order the code made them.
   readonly events: string[];
@@ -103,6 +134,8 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     paneCloses: [],
     focus: [],
     telemetry: [],
+    status: [],
+    debug: [],
     commands: [],
     events: [],
   };
@@ -129,6 +162,40 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     if (argv[0] === "mkdir" || argv[0] === "chmod") return stdoutResult("");
     // Any other command is treated as absent, as a machine without that tool would report.
     throw new Error(`spawn ${argv[0]} ENOENT`);
+  }
+
+  // A child the script describes: its pieces arrive one at a time, and `return()`
+  // ends it, as an abort does on the host.
+  function spawnChild(script: ScriptedChild): HookStream<ProcessSpawnChunk, ProcessSpawnResult> {
+    let index = 0;
+    let finished = false;
+    let wake: ((step: IteratorResult<ProcessSpawnChunk, ProcessSpawnResult>) => void) | undefined;
+    const killed: IteratorResult<ProcessSpawnChunk, ProcessSpawnResult> = { done: true, value: { code: null, signal: "SIGTERM" } };
+    const stream = {
+      async next(): Promise<IteratorResult<ProcessSpawnChunk, ProcessSpawnResult>> {
+        if (finished) return { done: true, value: { code: null, signal: null } };
+        if (index < script.pieces.length) {
+          const text = script.pieces[index] ?? "";
+          index += 1;
+          recorded.events.push(`child:piece:${index}`);
+          return { done: false, value: { stream: "stdout", text } };
+        }
+        if (script.hang === true) return new Promise((resolve) => (wake = resolve));
+        finished = true;
+        recorded.events.push("child:exit");
+        return { done: true, value: { code: script.code ?? 0, signal: null } };
+      },
+      async return(): Promise<IteratorResult<ProcessSpawnChunk, ProcessSpawnResult>> {
+        recorded.events.push("child:killed");
+        finished = true;
+        wake?.(killed);
+        return killed;
+      },
+      [Symbol.asyncIterator]() {
+        return stream;
+      },
+    };
+    return stream as unknown as HookStream<ProcessSpawnChunk, ProcessSpawnResult>;
   }
 
   const engine = {
@@ -170,8 +237,12 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     },
     process: {
       run,
-      spawn: () => {
-        throw new Error("fake engine: process.spawn is not modelled");
+      spawn: (request: ProcessSpawnRequest) => {
+        recorded.processes.push({ argv: [...request.argv], env: request.env, stdin: request.input });
+        recorded.events.push(`process:${request.argv.join(" ")}`);
+        const script = options.spawn?.(request);
+        if (script === undefined) throw new Error(`spawn ${request.argv[0]} ENOENT`);
+        return spawnChild(script);
       },
     },
     http: {
@@ -186,7 +257,7 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
         const reply = options.http?.(request);
         if (reply === undefined) throw new Error("fake engine: no network");
         const text = reply.text ?? (reply.body === undefined ? "" : JSON.stringify(reply.body));
-        return { status: reply.status, ok: reply.status >= 200 && reply.status < 300, headers: {}, text };
+        return { status: reply.status, ok: reply.status >= 200 && reply.status < 300, headers: { ...reply.headers }, text };
       },
     },
     store: {
@@ -204,10 +275,24 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     settings: {
       read: async () => ({}),
     },
-    session: {},
+    session: {
+      id: async () => options.session?.id ?? "session-test",
+      messages: async () => options.session?.messages ?? [],
+    },
+    plugin: { name: "nmg-router", root: options.pluginRoot ?? "/plugin" },
+    prompt: {
+      compose: async () => options.compose ?? { sections: [] },
+    },
+    tool: {
+      list: async () => [...(options.tools ?? [])],
+    },
     ui: {
-      log: (text: string) => {
-        recorded.ui.push(text);
+      log: (text: string, logOptions?: { readonly to: "debug" | "transcript" }) => {
+        if (logOptions?.to === "debug") recorded.debug.push(text);
+        else recorded.ui.push(text);
+      },
+      status: (text: string | undefined) => {
+        recorded.status.push(text ?? "");
       },
       toast: (text: string) => {
         recorded.ui.push(text);

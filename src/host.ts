@@ -35,7 +35,7 @@ export type HostPort = {
     delete(key: string): Promise<void>;
   };
   readonly ui: {
-    log(text: string): void;
+    log(text: string, options?: { readonly to: "debug" }): void;
     open(args: PaneOpenArgs): Promise<UiOpenResult>;
     close(args: PaneCloseArgs): Promise<void>;
     focus(args: UiFocusArgs): Promise<UiFocusResult>;

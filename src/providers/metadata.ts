@@ -1,6 +1,13 @@
-import type { RawModel } from "./types.ts";
+import type { Effort, RawModel } from "./types.ts";
 
-export type ModelMetadata = Omit<RawModel, "id">;
+// A model whose reasoning field is named by level (its own field and value per effort).
+export type ReasoningTransport = {
+  readonly transport: "level";
+  readonly field: string;
+  readonly levels: Readonly<Partial<Record<Effort, string | boolean>>>;
+};
+
+export type ModelMetadata = Omit<RawModel, "id"> & { readonly reasoningTransport?: ReasoningTransport };
 
 // Bundled capability metadata for built-in providers' current models, keyed by
 // `provider/model`. A provider's live list supplies the limits it knows, and

@@ -18,7 +18,8 @@ export type Auth = { token: string; accountId?: string };
 // What a provider needs about the host and the active credential to build a request.
 export type ProviderContext = { platform: string; auth?: Auth };
 
-export type HeaderContext = { platform: string; accountId?: string };
+// `version` and `sessionId` are set on routed requests only.
+export type HeaderContext = { platform: string; accountId?: string; version?: string; sessionId?: string };
 
 export type ProviderIdentity = {
   readonly id: string;
