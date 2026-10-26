@@ -62,7 +62,18 @@ export type Router = {
 
 type StopChunk = Extract<TurnStepChunk, { kind: "stop" }>;
 
+// How far a routed step got: the provider's name and how many blocks the engine
+// took. A failure answers in the next block, so its text never lands in a block
+// already streamed.
 type Progress = { name: string; blocks: number };
+
+// Progress is kept per step until the step ends, so the `.catch` answer for a hook
+// the engine failed mid-stream can read it. A few steps are kept, oldest dropped.
+const KEPT_STEPS = 16;
+
+function stepKey(e: TurnStepInput): string {
+  return `${e.agentId ?? ""}:${e.turnId}:${e.index}`;
+}
 
 type Tally = {
   text: string;
@@ -81,8 +92,8 @@ type Gate = {
 
 // Nothing reaches the engine before the response's model passes the guard. A stream
 // that never names a model, or never stops, is malformed and its content is dropped.
-function createGate(name: string, requested: string, turnId: string): Gate {
-  const mapper = createChunkMapper({ turnId, model: requested });
+function createGate(name: string, requested: string, turnId: string, step: number): Gate {
+  const mapper = createChunkMapper({ turnId, step, model: requested });
   let verified = false;
   let stopped = false;
   let held: TurnStepChunk[] = [];
@@ -127,6 +138,9 @@ function tally(result: Tally, chunk: TurnStepChunk): void {
   switch (chunk.kind) {
     case "text":
       result.text += chunk.text;
+      result.blocks = Math.max(result.blocks, chunk.index + 1);
+      return;
+    case "thinking":
       result.blocks = Math.max(result.blocks, chunk.index + 1);
       return;
     case "tool":
@@ -177,6 +191,7 @@ export function createRouter(host: RouterHost, capture: ComposeCapture): Router 
   });
   let loaded: Promise<void> | undefined;
   let version: Promise<string> | undefined;
+  const steps = new Map<string, Progress>();
 
   async function providerOf(model: string): Promise<ProviderPlugin | undefined> {
     const parsed = parseModelId(model);
@@ -301,15 +316,15 @@ export function createRouter(host: RouterHost, capture: ComposeCapture): Router 
     }
 
     const parser: StreamParser = adapter.parser();
-    const gate = createGate(name, e.model, e.turnId);
+    const gate = createGate(name, e.model, e.turnId, e.index);
     const result: Tally = { text: "", toolUses: [], toolNames: new Map(), stop: undefined, blocks: 0 };
     for await (const piece of response.body) {
       if (signal.aborted) return resultOf(e, result);
       for (const event of parser.push(piece)) {
         for (const chunk of gate.accept(event)) {
           tally(result, chunk);
-          progress.blocks = result.blocks;
           yield chunk;
+          progress.blocks = result.blocks;
         }
       }
     }
@@ -317,8 +332,8 @@ export function createRouter(host: RouterHost, capture: ComposeCapture): Router 
     for (const event of parser.end()) {
       for (const chunk of gate.accept(event)) {
         tally(result, chunk);
-        progress.blocks = result.blocks;
         yield chunk;
+        progress.blocks = result.blocks;
       }
     }
     gate.finish();
@@ -338,21 +353,42 @@ export function createRouter(host: RouterHost, capture: ComposeCapture): Router 
 
     async *answer(e, signal) {
       const progress: Progress = { name: parseModelId(e.model)?.provider ?? e.model, blocks: 0 };
+      const key = stepKey(e);
+      steps.delete(key);
+      steps.set(key, progress);
+      for (const old of steps.keys()) {
+        if (steps.size <= KEPT_STEPS) break;
+        steps.delete(old);
+      }
+      // A chunk the engine refuses ends this generator at its yield, so the entry
+      // is left for the `.catch` answer; every other ending removes it.
+      let answered: TurnStepResult;
       try {
         const plugin = await providerOf(e.model);
         if (plugin === undefined) throw new Error("a routed step found no provider");
         progress.name = plugin.identity.name;
-        return yield* routed(e, signal, plugin, progress);
+        answered = yield* routed(e, signal, plugin, progress);
       } catch (error) {
-        return yield* failure(e, progress.name, error, signal, progress.blocks);
+        answered = yield* failure(e, progress.name, error, signal, progress.blocks);
       }
+      steps.delete(key);
+      return answered;
     },
 
     async *fail(e, error) {
+      const key = stepKey(e);
+      const progress = steps.get(key);
+      steps.delete(key);
       const name = await providerOf(e.model)
         .then((plugin) => plugin?.identity.name)
         .catch(() => undefined);
-      return yield* failure(e, name ?? parseModelId(e.model)?.provider ?? e.model, error, new AbortController().signal, 0);
+      return yield* failure(
+        e,
+        name ?? parseModelId(e.model)?.provider ?? e.model,
+        error,
+        new AbortController().signal,
+        progress?.blocks ?? 0,
+      );
     },
   };
 }

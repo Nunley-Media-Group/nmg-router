@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { routeStep } from "../../src/routing/turn-step.ts";
-import { CHAT_URL, MODEL, chatTurn, collect, harness, postsTo, remember, replies, signIn, spyNext, step, textOf } from "../support/routing.ts";
+import { CHAT_URL, MODEL, chatTurn, collect, harness, onEngine, postsTo, remember, replies, signIn, spyNext, step, textOf } from "../support/routing.ts";
 
 // AC2: a routed model completes Read, Edit and a final answer, each request carrying
 // the captured system prompt, the conversation so far and only the offered tools.
@@ -47,6 +47,40 @@ describe("a routed model completes an agentic turn", () => {
       tool_calls: [{ id: "call_1", type: "function", function: { name: "Read", arguments: '{"file_path":"notes.txt"}' } }],
     });
     expect(bodies[1]?.messages).toContainEqual({ role: "tool", tool_call_id: "call_1", content: "old" });
+    expect(next.calls).toEqual([]);
+  });
+});
+
+// AC2: a provider tool call id the engine would refuse (`functions.Read:0`) is
+// replaced by an engine-safe id, unique per turn, step and block, and that id is what
+// the next request sends back.
+describe("a provider tool call id outside the engine's charset", () => {
+  it("is replaced, the engine takes the call, and the next request carries the same id", async () => {
+    const h = harness({
+      http: replies(
+        chatTurn({ thinking: "Reading.", tool: { id: "functions.Read:0", name: "Read", input: { file_path: "notes.txt" } } }),
+        chatTurn({ tool: { id: "functions.Read:0", name: "Read", input: { file_path: "other.txt" } } }),
+      ),
+    });
+    await signIn(h.engine);
+    remember(h.capture);
+    const next = spyNext();
+
+    const first = await onEngine(h.router, step(0), next);
+    expect(first.caught).toBe(false);
+    const tool = first.chunks.find((chunk) => chunk.kind === "tool");
+    expect(tool).toEqual({ kind: "tool", index: 1, id: "call_turn-1_0_1", name: "Read" });
+
+    h.messages.push(
+      { role: "assistant", content: [{ type: "tool_use", id: "call_turn-1_0_1", name: "Read", input: { file_path: "notes.txt" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "call_turn-1_0_1", content: [{ type: "text", text: "old" }] }] },
+    );
+    const second = await onEngine(h.router, step(1), next);
+    expect(second.caught).toBe(false);
+    expect(second.chunks).toContainEqual({ kind: "tool", index: 0, id: "call_turn-1_1_0", name: "Read" });
+
+    const body = JSON.parse(postsTo(h.engine, CHAT_URL)[1]?.body ?? "{}") as { messages: unknown[] };
+    expect(body.messages).toContainEqual({ role: "tool", tool_call_id: "call_turn-1_0_1", content: "old" });
     expect(next.calls).toEqual([]);
   });
 });

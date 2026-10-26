@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { routeStep, routeStepFailed } from "../../src/routing/turn-step.ts";
-import { CHAT_URL, chatTurn, collect, harness, postsTo, remember, replies, signIn, spyNext, step, textOf, MODEL } from "../support/routing.ts";
+import {
+  CHAT_URL,
+  blockKinds,
+  chatTurn,
+  collect,
+  harness,
+  onEngine,
+  postsTo,
+  remember,
+  replies,
+  signIn,
+  spyNext,
+  step,
+  textOf,
+  MODEL,
+} from "../support/routing.ts";
 
 const PROVIDER = "OpenCode Go";
 
@@ -82,5 +97,23 @@ describe("clear errors and no fallback", () => {
     const replayed = await collect(routeStepFailed(h.router, step(1, "claude-haiku-5-5"), claude));
     expect(textOf(replayed.chunks)).toBe("from claude");
     expect(claude.calls).toHaveLength(1);
+  });
+
+  it("answers a hook the engine failed mid-stream in a block of its own, so the message is shown", async () => {
+    const h = harness({
+      http: replies(chatTurn({ thinking: "Let me read it.", tool: { id: "call_1", name: "Read", input: { file_path: "notes.txt" } } })),
+    });
+    await signIn(h.engine);
+    remember(h.capture);
+    const next = spyNext();
+    const run = await onEngine(h.router, step(0), next, (chunk) => (chunk.kind === "tool" ? "refused" : undefined));
+
+    expect(run.caught).toBe(true);
+    expect(blockKinds(run.chunks)).toEqual(["thinking", "text"]);
+    expect(run.chunks).toContainEqual({ kind: "text", index: 1, text: `nmg-router failed to answer with ${PROVIDER}.` });
+    expect(run.chunks.at(-1)).toEqual({ kind: "stop", stopReason: "end_turn", usage: null });
+    expect(h.engine.recorded.status.at(-1)).toBe(`${MODEL} · ${PROVIDER} error: internal`);
+    expect(next.calls).toEqual([]);
+    expect(postsTo(h.engine, CHAT_URL)).toHaveLength(1);
   });
 });

@@ -40,7 +40,7 @@ export function replay(parser: StreamParser, pieces: readonly string[]): StreamE
 }
 
 export function chunksOf(events: readonly StreamEvent[]): TurnStepChunk[] {
-  const mapper = createChunkMapper({ turnId: TURN_ID, model: FIXTURE_MODEL });
+  const mapper = createChunkMapper({ turnId: TURN_ID, step: 0, model: FIXTURE_MODEL });
   return events.flatMap((event) => mapper.map(event));
 }
 

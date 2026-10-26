@@ -4,6 +4,11 @@ import type { BlockKey, StopReason, StreamEvent, StreamUsage } from "./types.ts"
 // Turns the parser's events into the engine's response chunks. Each block gets
 // the next index in order of appearance. A tool call is held until its input is
 // complete, then sent as one tool chunk and one whole input chunk.
+//
+// The engine takes a tool call id of letters, digits, `_` or `-` only, and keeps
+// it in the transcript, so later requests send it back to the provider. A provider
+// id outside that set (`functions.Read:0`) or an empty one is replaced by an id
+// made from the turn, step and block, which is unique in the session.
 
 type StopChunk = Extract<TurnStepChunk, { kind: "stop" }>;
 type TurnStopReason = StopChunk["stopReason"];
@@ -16,11 +21,20 @@ export type ChunkMapper = {
 
 export type ChunkTarget = {
   readonly turnId: string;
+  // The step's position in the turn.
+  readonly step: number;
   // The routed model id, which usage reports as the model that answered.
   readonly model: string;
 };
 
 type OpenTool = { index: number; id: string; name: string; json: string };
+
+const ENGINE_ID = /^[A-Za-z0-9_-]+$/;
+
+function toolIdOf(id: string, target: ChunkTarget, index: number): string {
+  if (ENGINE_ID.test(id)) return id;
+  return `call_${target.turnId.replace(/[^A-Za-z0-9_-]/g, "_")}_${target.step}_${index}`;
+}
 
 function stopReasonOf(reason: StopReason, sawTool: boolean): TurnStopReason {
   switch (reason) {
@@ -91,9 +105,8 @@ export function createChunkMapper(target: ChunkTarget): ChunkMapper {
           const tool = tools.get(event.block);
           if (tool === undefined) return [];
           tools.delete(event.block);
-          const id = tool.id === "" ? `call_${target.turnId}_${tool.index}` : tool.id;
           return [
-            { kind: "tool", index: tool.index, id, name: tool.name },
+            { kind: "tool", index: tool.index, id: toolIdOf(tool.id, target, tool.index), name: tool.name },
             { kind: "input", index: tool.index, json: inputJson(tool.json) },
           ];
         }

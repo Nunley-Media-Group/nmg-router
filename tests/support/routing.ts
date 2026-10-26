@@ -3,7 +3,7 @@ import { encodeSecret } from "../../src/auth/accounts.ts";
 import { createCredentialStore } from "../../src/credentials/store.ts";
 import { createComposeCapture, type ComposeCapture } from "../../src/routing/compose-capture.ts";
 import { createRouter, type Router, type RouterHost } from "../../src/routing/router.ts";
-import type { StepNext } from "../../src/routing/turn-step.ts";
+import { routeStep, routeStepFailed, type StepNext } from "../../src/routing/turn-step.ts";
 import type { ApiMessageInput } from "../../src/translate/messages.ts";
 import { fakeEngine, type FakeEngine, type FakeHttpResponder, type FakeOptions } from "./fake-engine.ts";
 
@@ -79,10 +79,17 @@ export function step(index = 0, model = MODEL, extra: Partial<TurnStepInput> = {
   return { turnId: "turn-1", index, model, messageCount: 1, ...extra };
 }
 
-// One OpenAI-style chat stream: optional text, optional tool call, then usage and [DONE].
-export function chatTurn(options: { text?: string; model?: string; tool?: { id: string; name: string; input: unknown } }): string {
+// One OpenAI-style chat stream: optional thinking, optional text, optional tool call, then usage and [DONE].
+export function chatTurn(options: {
+  thinking?: string;
+  text?: string;
+  model?: string;
+  tool?: { id: string; name: string; input: unknown };
+}): string {
   const model = options.model ?? "fixture-model-1";
-  const events: unknown[] = [{ model, choices: [{ index: 0, delta: { role: "assistant", content: options.text ?? "" } }] }];
+  const events: unknown[] = [];
+  if (options.thinking !== undefined) events.push({ model, choices: [{ index: 0, delta: { role: "assistant", reasoning_content: options.thinking } }] });
+  events.push({ model, choices: [{ index: 0, delta: { role: "assistant", content: options.text ?? "" } }] });
   if (options.tool !== undefined) {
     const { id, name, input } = options.tool;
     events.push({
@@ -144,4 +151,54 @@ export function textOf(chunks: readonly TurnStepChunk[]): string {
 
 export function postsTo(engine: FakeEngine, url: string) {
   return engine.recorded.http.filter((request) => request.method === "POST" && request.url === url);
+}
+
+// The engine's own check on a chunk a hook yields: a tool chunk needs an index,
+// a name and an id of letters, digits, _ or -. The message is the host's.
+export function engineRefusal(chunk: TurnStepChunk): string | undefined {
+  if (chunk.kind !== "tool") return undefined;
+  if (Number.isInteger(chunk.index) && chunk.name !== "" && /^[A-Za-z0-9_-]+$/.test(chunk.id)) return undefined;
+  return "yielded a chunk with kind tool but no { index, id, name } (an id of letters, digits, _ or -)";
+}
+
+export type EngineRun = { chunks: TurnStepChunk[]; caught: boolean };
+
+// Runs a step as the engine dispatches the turn.step hook and its .catch: a refused
+// chunk fails the hook at its yield, the chunks already taken stay, and the catch
+// handler continues the same stream.
+export async function onEngine(
+  router: Router,
+  e: TurnStepInput,
+  next: StepNext,
+  refuse: (chunk: TurnStepChunk) => string | undefined = engineRefusal,
+): Promise<EngineRun> {
+  const chunks: TurnStepChunk[] = [];
+  const stream = routeStep(router, e, next);
+  for (;;) {
+    const item = await stream.next();
+    if (item.done === true) return { chunks, caught: false };
+    const message = refuse(item.value);
+    if (message === undefined) {
+      chunks.push(item.value);
+      continue;
+    }
+    await stream.return(undefined);
+    const caught = Object.assign(next, { error: { kind: "throw" as const, message, budget: 1000 }, called: false });
+    chunks.push(...(await collect(routeStepFailed(router, e, caught))).chunks);
+    return { chunks, caught: true };
+  }
+}
+
+// The kind of each block index, failing on an index two kinds share: the engine
+// would merge the later chunks into the earlier block.
+export function blockKinds(chunks: readonly TurnStepChunk[]): string[] {
+  const kinds: string[] = [];
+  for (const chunk of chunks) {
+    if (chunk.kind === "stop" || chunk.kind === "engine") continue;
+    const kind = chunk.kind === "input" ? "tool" : chunk.kind;
+    const known = kinds[chunk.index];
+    if (known !== undefined && known !== kind) throw new Error(`block ${chunk.index} carries both ${known} and ${kind}`);
+    kinds[chunk.index] = kind;
+  }
+  return kinds;
 }
