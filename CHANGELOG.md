@@ -7,6 +7,7 @@
 ### Changed
 
 - Add the provider catalog with provider-aware /login and /logout (#2)
+- Store provider credentials in the encrypted vault on every OS (#19)
 
 ## [0.2.0] - 2026-10-26
 

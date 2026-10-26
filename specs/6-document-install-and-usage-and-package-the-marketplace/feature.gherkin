@@ -20,4 +20,4 @@ Feature: Documented install and setup
     Given the README
     When its level-2 headings and sections are checked
     Then it has Requirements, Installation, Logging in to providers, Choosing a model, Thinking levels, Auto-mode permissions, Custom providers and filters, Known limits, Credential boundary, Credential security and Contributing in that order
-    And Credential boundary says Claude credentials stay with Claude Code and provider credentials stay in the OS keyring
+    And Credential boundary says Claude credentials stay with Claude Code and provider credentials stay in the encrypted vault

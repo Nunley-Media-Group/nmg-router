@@ -122,10 +122,10 @@
 **Type**: Create
 **Depends**: T008, T009
 **Acceptance**:
-- AC5: the picker title and rows (Anthropic plus enabled providers, with status) are asserted; search appears with 11 rows and not with 10; picking Anthropic returns the `next(e)` result, with zero store, keyring, settings and fs calls
+- AC5: the picker title and rows (Anthropic plus enabled providers, with status) are asserted; search appears with 11 rows and not with 10; picking Anthropic returns the `next(e)` result, with zero store, vault, settings and fs calls
 - AC6: a 200 validation saves the key as `opencode-go/default`, returns "Logged in to OpenCode Go" and refreshes OpenCode Go; a 401 saves nothing and returns the invalid-key error; the masked field only ever draws `•`
 - AC7: a pasted redirect URL exchanges the code and saves tokens and expiry under the account id, the result names the email, and `$.process.spawn` is never called; a mismatched state saves nothing; an expired credential is refreshed and saved before discovery uses it
-- AC8: two Codex accounts list with the active one marked `(active)`; deleting one removes only that keyring entry and makes the other active; the logout picker lists only providers with credentials; Anthropic returns the `next(e)` result
+- AC8: two Codex accounts list with the active one marked `(active)`; deleting one removes only that vault entry and makes the other active; the logout picker lists only providers with credentials; Anthropic returns the `next(e)` result
 
 ### T013: Credential leak tests
 

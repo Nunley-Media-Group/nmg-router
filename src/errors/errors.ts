@@ -2,12 +2,7 @@
 // the login flows. Messages name a model, a provider, a platform or a config
 // path. They never carry a secret, a response body or a child process's stderr.
 
-export type CredentialErrorCode =
-  | "anthropic_refused"
-  | "invalid_id"
-  | "keyring_locked"
-  | "keyring_failed"
-  | "vault_failed";
+export type CredentialErrorCode = "anthropic_refused" | "invalid_id" | "vault_failed";
 
 const REQUEST_REASONS = {
   provider: "its provider is anthropic",
@@ -65,7 +60,6 @@ export class ProviderRejected extends Error {
 export type CredentialErrorDetail = {
   readonly platform?: string;
   readonly provider?: string;
-  readonly exitCode?: number;
 };
 
 function credentialMessage(code: CredentialErrorCode, detail: CredentialErrorDetail): string {
@@ -76,10 +70,6 @@ function credentialMessage(code: CredentialErrorCode, detail: CredentialErrorDet
       return "Anthropic credentials are never stored.";
     case "invalid_id":
       return "Provider and account ids are lowercase letters, digits, dots, dashes or underscores, up to 64 characters.";
-    case "keyring_locked":
-      return `The ${platform} keyring is locked; the credential for ${provider} was not changed.`;
-    case "keyring_failed":
-      return `The ${platform} keyring failed for ${provider} (exit code ${detail.exitCode ?? "unknown"}).`;
     case "vault_failed":
       return `The encrypted vault failed on ${platform} for ${provider}.`;
   }
@@ -89,7 +79,6 @@ export class CredentialError extends Error {
   readonly code: CredentialErrorCode;
   readonly platform: string | undefined;
   readonly provider: string | undefined;
-  readonly exitCode: number | undefined;
 
   constructor(code: CredentialErrorCode, detail: CredentialErrorDetail = {}) {
     super(credentialMessage(code, detail));
@@ -97,20 +86,6 @@ export class CredentialError extends Error {
     this.code = code;
     this.platform = detail.platform;
     this.provider = detail.provider;
-    this.exitCode = detail.exitCode;
-  }
-}
-
-// Internal signal: this platform has no usable keyring. The credential store
-// turns it into a vault write and never shows it to a caller.
-export class NoKeyringError extends Error {
-  readonly code = "no_keyring";
-  readonly platform: string;
-
-  constructor(platform: string) {
-    super(`No keyring is available on ${platform}.`);
-    this.name = "NoKeyringError";
-    this.platform = platform;
   }
 }
 

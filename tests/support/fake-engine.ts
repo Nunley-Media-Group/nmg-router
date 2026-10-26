@@ -2,13 +2,8 @@ import type { CommandRunArgs, EngineInterface, ProcessRunInit, ProcessRunResult 
 
 export type FakePlatform = "macos" | "windows" | "linux" | "other";
 
-// `working` answers as a healthy keyring. `absent` has no keyring tool at all,
-// so the tool cannot start. `locked` and `failing` are the two refusals.
-export type KeyringState = "working" | "locked" | "failing" | "absent";
-
 export type FakeOptions = {
   readonly platform: FakePlatform;
-  readonly keyring?: KeyringState;
   // An undefined value unsets a variable the platform defaults would set.
   readonly env?: Record<string, string | undefined>;
   readonly files?: Record<string, string>;
@@ -87,97 +82,11 @@ function defaultEnv(platform: FakePlatform): Record<string, string> {
   if (platform === "windows") {
     return { OS: "Windows_NT", LOCALAPPDATA: "C:\\Users\\tester\\AppData\\Local", HOME: HOME.windows };
   }
-  const env: Record<string, string> = { HOME: HOME[platform] };
-  if (platform === "linux") env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/run/user/501/bus";
-  return env;
+  return { HOME: HOME[platform] };
 }
 
 function stdoutResult(stdout: string): ProcessRunResult {
   return { exitCode: 0, stdout, stderr: "", isStdoutTruncated: false, isStderrTruncated: false };
-}
-
-function failure(exitCode: number, stderr = ""): ProcessRunResult {
-  return { exitCode, stdout: "", stderr, isStdoutTruncated: false, isStderrTruncated: false };
-}
-
-function hexDecode(hex: string): string {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i += 1) bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  return new TextDecoder().decode(bytes);
-}
-
-function argAfter(argv: readonly string[], flag: string): string | undefined {
-  const index = argv.indexOf(flag);
-  return index === -1 ? undefined : argv[index + 1];
-}
-
-// One simulated keyring per fake engine, keyed by account (macOS and Linux) or
-// by target (Windows). Each platform's tool is answered as the real one would be.
-function keyringRun(
-  platform: FakePlatform,
-  state: KeyringState,
-  store: Map<string, string>,
-  argv: readonly string[],
-  stdin: string | undefined,
-): ProcessRunResult {
-  if (state === "absent") throw new Error(`spawn ${argv[0]} ENOENT`);
-  if (platform === "macos" && argv[0] === "security") {
-    if (state === "locked") return failure(36, "User interaction is not allowed.");
-    if (state === "failing") return failure(1, "SecKeychain internal failure");
-    if (argv[1] === "-i") {
-      const match = /^add-generic-password -U -s \S+ -a (\S+) -X ([0-9a-f]+)\s*$/m.exec(stdin ?? "");
-      if (!match) return failure(1, "unparsed command");
-      store.set(match[1] ?? "", hexDecode(match[2] ?? ""));
-      return stdoutResult("");
-    }
-    const account = argAfter(argv, "-a") ?? "";
-    if (argv[1] === "find-generic-password") {
-      const secret = store.get(account);
-      return secret === undefined ? failure(44) : stdoutResult(`${secret}\n`);
-    }
-    if (argv[1] === "delete-generic-password") {
-      if (!store.has(account)) return failure(44);
-      store.delete(account);
-      return stdoutResult("");
-    }
-  }
-  if (platform === "linux" && argv[0] === "secret-tool") {
-    if (state === "locked") return failure(1, "Cannot unlock: the keyring was dismissed");
-    if (state === "failing") return failure(3, "secret-tool: unexpected failure");
-    const account = argAfter(argv, "account") ?? "";
-    if (argv[1] === "store") {
-      store.set(account, stdin ?? "");
-      return stdoutResult("");
-    }
-    if (argv[1] === "lookup") {
-      const secret = store.get(account);
-      return secret === undefined ? failure(1) : stdoutResult(secret);
-    }
-    if (argv[1] === "clear") {
-      store.delete(account);
-      return stdoutResult("");
-    }
-  }
-  if (platform === "windows" && argv[0] === "powershell.exe") {
-    if (state === "locked" || state === "failing") return failure(1, "credential manager failure");
-    const mode = /\$mode = '(\w+)'/.exec(stdin ?? "")?.[1];
-    const target = /\$target = '([^']*)'/.exec(stdin ?? "")?.[1] ?? "";
-    const blob = /\$blob = '([^']*)'/.exec(stdin ?? "")?.[1] ?? "";
-    if (mode === "write") {
-      store.set(target, blob);
-      return stdoutResult("");
-    }
-    if (mode === "read") {
-      const stored = store.get(target);
-      return stored === undefined ? failure(2) : stdoutResult(stored);
-    }
-    if (mode === "delete") {
-      if (!store.has(target)) return failure(2);
-      store.delete(target);
-      return stdoutResult("");
-    }
-  }
-  throw new Error(`spawn ${argv[0]} ENOENT`);
 }
 
 // Recording fakes for every noun the mod's storage code uses. Nothing here
@@ -200,8 +109,6 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
   const env: Record<string, string | undefined> = { ...defaultEnv(options.platform), ...options.env };
   const files = new Map<string, string>(Object.entries(options.files ?? {}));
   const kv = new Map<string, unknown>();
-  const keyrings = new Map<string, string>();
-  const keyringState = options.keyring ?? "working";
   const columns = options.columns ?? 200;
   let askingDepth = 0;
   const askedPanes = new Set<string>();
@@ -220,7 +127,8 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     if (override !== undefined) return override;
     if (argv[0] === "uname") return uname();
     if (argv[0] === "mkdir" || argv[0] === "chmod") return stdoutResult("");
-    return keyringRun(options.platform, keyringState, keyrings, argv, init?.stdin);
+    // Any other command is treated as absent, as a machine without that tool would report.
+    throw new Error(`spawn ${argv[0]} ENOENT`);
   }
 
   const engine = {

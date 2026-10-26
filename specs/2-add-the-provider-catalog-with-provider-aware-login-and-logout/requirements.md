@@ -64,7 +64,7 @@ The #1 foundation exists: the Anthropic guard (`src/gateway/`), the provider reg
 **Given** the user chooses OpenCode Go
 **When** they enter a key in the masked input
 **Then**:
-- the key is validated against the provider's model list and saved to the keyring as the provider's `default` account only if valid;
+- the key is validated against the provider's model list and saved to the credential vault as the provider's `default` account only if valid;
 - an invalid key saves nothing and shows an error;
 - success shows "Logged in to OpenCode Go" and refreshes that provider's models.
 
@@ -72,7 +72,7 @@ The #1 foundation exists: the Anthropic guard (`src/gateway/`), the provider reg
 
 **Given** the user chooses OpenAI Codex
 **When** the mod shows the login URL and the user pastes the redirect URL or code
-**Then** the tokens and their expiry are saved to the keyring under the account's id, and the account's email is shown, without opening a listening port; a pasted URL whose state does not match is refused, and an expired token is refreshed and saved before the next request that needs it
+**Then** the tokens and their expiry are saved to the credential vault under the account's id, and the account's email is shown, without opening a listening port; a pasted URL whose state does not match is refused, and an expired token is refreshed and saved before the next request that needs it
 
 ### AC8: Accounts and logout
 
@@ -81,7 +81,7 @@ The #1 foundation exists: the Anthropic guard (`src/gateway/`), the provider reg
 **Then**:
 - the picker lists Anthropic and only the providers with stored credentials;
 - the account picker marks the active account `(active)`;
-- the chosen credential is deleted from the keyring, and the remaining account becomes active;
+- the chosen credential is deleted from the credential vault, and the remaining account becomes active;
 - choosing Anthropic runs Claude Code's built-in logout through `next(e)`.
 
 ## Functional Requirements

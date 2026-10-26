@@ -21,7 +21,7 @@ async function vaultError(task: () => Promise<unknown>): Promise<unknown> {
 
 describe("keyfile vault on POSIX", () => {
   it("creates the owner-only directory before any write, and chmods each file to 600 after writing it", async () => {
-    const engine = fakeEngine({ platform: "linux", keyring: "absent" });
+    const engine = fakeEngine({ platform: "linux" });
     const vault = createVault(engine, "linux");
 
     await vault.save("opencode-go", "default", makeSentinel());
@@ -41,7 +41,7 @@ describe("keyfile vault on POSIX", () => {
   });
 
   it("writes a random 256-bit key, and vault.json holds ciphertext rather than the plaintext", async () => {
-    const engine = fakeEngine({ platform: "linux", keyring: "absent" });
+    const engine = fakeEngine({ platform: "linux" });
     const vault = createVault(engine, "linux");
     const secret = makeSentinel();
 
@@ -58,7 +58,7 @@ describe("keyfile vault on POSIX", () => {
   });
 
   it("round-trips several entries and gives a fresh IV on each write", async () => {
-    const engine = fakeEngine({ platform: "linux", keyring: "absent" });
+    const engine = fakeEngine({ platform: "linux" });
     const vault = createVault(engine, "linux");
 
     await vault.save("opencode-go", "default", "first-secret");
@@ -73,7 +73,7 @@ describe("keyfile vault on POSIX", () => {
   });
 
   it("removes only the deleted entry", async () => {
-    const engine = fakeEngine({ platform: "linux", keyring: "absent" });
+    const engine = fakeEngine({ platform: "linux" });
     const vault = createVault(engine, "linux");
 
     await vault.save("opencode-go", "default", "keep-me");
@@ -85,7 +85,7 @@ describe("keyfile vault on POSIX", () => {
   });
 
   it("refuses a malformed key as vault_failed and writes nothing", async () => {
-    const engine = fakeEngine({ platform: "linux", keyring: "absent", files: { [KEY]: "AAAA" } });
+    const engine = fakeEngine({ platform: "linux", files: { [KEY]: "AAAA" } });
     const vault = createVault(engine, "linux");
 
     const error = await vaultError(() => vault.save("opencode-go", "default", "secret"));
@@ -96,9 +96,9 @@ describe("keyfile vault on POSIX", () => {
   });
 
   it("never regenerates a missing key over existing entries", async () => {
-    const seeded = fakeEngine({ platform: "linux", keyring: "absent" });
+    const seeded = fakeEngine({ platform: "linux" });
     await createVault(seeded, "linux").save("opencode-go", "default", "secret");
-    const orphaned = fakeEngine({ platform: "linux", keyring: "absent", files: { [VAULT]: writtenText(seeded, VAULT) ?? "" } });
+    const orphaned = fakeEngine({ platform: "linux", files: { [VAULT]: writtenText(seeded, VAULT) ?? "" } });
 
     const error = await vaultError(() => createVault(orphaned, "linux").save("clinepass", "work", "new"));
 
@@ -107,7 +107,7 @@ describe("keyfile vault on POSIX", () => {
   });
 
   it("reports a tampered ciphertext as vault_failed without echoing the plaintext", async () => {
-    const seeded = fakeEngine({ platform: "linux", keyring: "absent" });
+    const seeded = fakeEngine({ platform: "linux" });
     const secret = makeSentinel();
     await createVault(seeded, "linux").save("opencode-go", "default", secret);
     const doc = JSON.parse(writtenText(seeded, VAULT) ?? "{}") as { entries: Record<string, { ct: string }> };
@@ -116,7 +116,6 @@ describe("keyfile vault on POSIX", () => {
     entry.ct = entry.ct.slice(0, -4) + (entry.ct.endsWith("AAAA") ? "BBBB" : "AAAA");
     const tampered = fakeEngine({
       platform: "linux",
-      keyring: "absent",
       files: { [KEY]: writtenText(seeded, KEY) ?? "", [VAULT]: JSON.stringify(doc) },
     });
 
@@ -130,7 +129,6 @@ describe("keyfile vault on POSIX", () => {
   it("refuses as vault_failed when the owner-only directory cannot be made, before any write", async () => {
     const engine: FakeEngine = fakeEngine({
       platform: "linux",
-      keyring: "absent",
       run: (argv) =>
         argv[0] === "mkdir"
           ? { exitCode: 1, stdout: "", stderr: "permission denied", isStdoutTruncated: false, isStderrTruncated: false }
@@ -144,7 +142,7 @@ describe("keyfile vault on POSIX", () => {
   });
 
   it("uses the macOS Application Support directory", async () => {
-    const engine = fakeEngine({ platform: "macos", keyring: "absent" });
+    const engine = fakeEngine({ platform: "macos" });
 
     await createVault(engine, "macos").save("opencode-go", "default", "secret");
 
@@ -155,7 +153,7 @@ describe("keyfile vault on POSIX", () => {
 
 describe("keyfile vault on Windows", () => {
   it("stores under LOCALAPPDATA and runs no POSIX mode commands", async () => {
-    const engine = fakeEngine({ platform: "windows", keyring: "absent" });
+    const engine = fakeEngine({ platform: "windows" });
 
     await createVault(engine, "windows").save("opencode-go", "default", "secret");
 

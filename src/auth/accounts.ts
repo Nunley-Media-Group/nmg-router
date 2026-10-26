@@ -1,8 +1,8 @@
 import type { HostPort } from "../host.ts";
 
-// Account secrets live in the keyring; the index that says which account is
+// Account secrets live in the credential vault; the index that says which account is
 // active, and the labels people see, live in $.store. Nothing here holds a
-// secret outside the secret encoding that the keyring receives.
+// secret outside the secret encoding that the vault receives.
 
 export type StoreDeps = Pick<HostPort, "store">;
 
@@ -56,7 +56,7 @@ export function decodeSecret(text: string): Secret | undefined {
   return undefined;
 }
 
-// Turns a provider's account id into a keyring account name: lowercase, every
+// Turns a provider's account id into a vault account name: lowercase, every
 // character outside [a-z0-9._-] becomes a dash, cut to 64 characters, and a
 // leading character that is not alphanumeric becomes `a`.
 export function accountIdFor(raw: string): string {

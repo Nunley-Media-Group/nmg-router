@@ -5,13 +5,10 @@ import { fakeEngine, type FakeOptions } from "../support/fake-engine.ts";
 import { assertNoSentinel, makeSentinel } from "../support/sentinel.ts";
 
 const scenarios: [string, FakeOptions][] = [
-  ["macos keyring", { platform: "macos" }],
-  ["windows keyring", { platform: "windows" }],
-  ["linux keyring", { platform: "linux" }],
-  ["macos locked keyring", { platform: "macos", keyring: "locked" }],
-  ["linux failing keyring", { platform: "linux", keyring: "failing" }],
-  ["vault after no keyring", { platform: "linux", keyring: "absent" }],
-  ["vault on another platform", { platform: "other" }],
+  ["macos vault", { platform: "macos" }],
+  ["windows vault", { platform: "windows" }],
+  ["linux vault", { platform: "linux" }],
+  ["other platform vault", { platform: "other" }],
 ];
 
 describe("sentinel hygiene", () => {
@@ -37,15 +34,18 @@ describe("sentinel hygiene", () => {
     assertNoSentinel(engine, secret, errors);
   });
 
-  it("keeps the sentinel out of the vault files on every vault path", async () => {
-    const engine = fakeEngine({ platform: "macos", keyring: "absent" });
-    const secret = makeSentinel();
+  it.each(["macos", "windows", "linux", "other"] as const)(
+    "keeps the sentinel out of the vault files on the %s vault path",
+    async (platform) => {
+      const engine = fakeEngine({ platform });
+      const secret = makeSentinel();
 
-    await createVault(engine, "macos").save("opencode-go", "default", secret);
+      await createVault(engine, platform).save("opencode-go", "default", secret);
 
-    assertNoSentinel(engine, secret);
-    expect(engine.recorded.fsWrites.length).toBeGreaterThan(0);
-  });
+      assertNoSentinel(engine, secret);
+      expect(engine.recorded.fsWrites.length).toBeGreaterThan(0);
+    },
+  );
 
   it("detects a sentinel that reaches a process argument", async () => {
     const engine = fakeEngine({ platform: "linux" });

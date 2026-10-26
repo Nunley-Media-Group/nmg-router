@@ -82,7 +82,7 @@ describe("/logout with two accounts (AC8)", () => {
     expect(await readActiveAccount(h.engine, "openai-codex")).toBe("acct-a");
   });
 
-  it("hands Anthropic to next(e) with no store, keyring, settings or file call after the pick", async () => {
+  it("hands Anthropic to next(e) with no store, vault, settings or file call after the pick", async () => {
     let atPick: ReturnType<typeof counts> | undefined;
     let h!: Harness;
     h = harness({ platform: "linux" }, [

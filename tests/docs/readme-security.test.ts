@@ -13,9 +13,7 @@ describe("README credential security section", () => {
   });
 
   it.each([
-    "Keychain",
-    "Credential Manager",
-    "Secret Service",
+    "every OS",
     "vault.key",
     "vault.json",
     "~/Library/Application Support/nmg-router",
@@ -26,10 +24,15 @@ describe("README credential security section", () => {
     "backups",
     "sync",
     "full-disk encryption",
-    "secret-tool",
-    "libsecret",
     "delete the vault directory",
   ])("names %s", (term) => {
     expect(section).toContain(term);
   });
+
+  it.each(["Keychain", "Credential Manager", "Secret Service", "secret-tool", "libsecret", "keyring"])(
+    "does not mention %s",
+    (term) => {
+      expect(section.toLowerCase()).not.toContain(term.toLowerCase());
+    },
+  );
 });

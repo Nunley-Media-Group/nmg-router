@@ -33,7 +33,7 @@ Each wire format is a pluggable adapter: OpenAI Chat Completions, OpenAI Respons
 
 No routed request is answered by another provider, account, model or Claude.
 
-The provider catalog, `ProviderPlugin` wire resolution, `resolveCredential`, the Anthropic guard and the keyring store exist. Nothing answers `turn.step` yet.
+The provider catalog, `ProviderPlugin` wire resolution, `resolveCredential`, the Anthropic guard and the credential vault exist. Nothing answers `turn.step` yet.
 
 ## Acceptance Criteria
 

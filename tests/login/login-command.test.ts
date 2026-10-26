@@ -45,7 +45,7 @@ describe("/login picker (AC5)", () => {
     ]);
   });
 
-  it("hands Anthropic to next(e) with no store, keyring, settings or file call after the pick", async () => {
+  it("hands Anthropic to next(e) with no store, vault, settings or file call after the pick", async () => {
     let atPick: ReturnType<typeof counts> | undefined;
     let h!: Harness;
     h = harness({ platform: "linux" }, [
