@@ -1,0 +1,23 @@
+**Issue**: #6
+**Date**: 2026-10-25
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/5-replace-model-with-an-oh-my-pi-style-model-hub/
+
+# File: tests/features/install-docs.feature
+# Generated from: specs/6-document-install-and-usage-and-package-the-marketplace/requirements.md
+Feature: Documented install and setup
+
+  @SCN001
+  Scenario: The README shows how to install from nmg-plugins
+    Given the README
+    When its Installation section is read
+    Then it gives "/plugin marketplace add Nunley-Media-Group/nmg-plugins" and "/plugin install nmg-router@nmg-plugins"
+    And "claude plugin validate ." passes
+
+  @SCN002
+  Scenario: The README covers setup and use
+    Given the README
+    When its level-2 headings and sections are checked
+    Then it has Requirements, Installation, Logging in to providers, Choosing a model, Thinking levels, Auto-mode permissions, Custom providers and filters, Known limits, Credential boundary, Credential security and Contributing in that order
+    And Credential boundary says Claude credentials stay with Claude Code and provider credentials stay in the OS keyring
