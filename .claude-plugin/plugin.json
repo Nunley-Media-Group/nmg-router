@@ -6,12 +6,7 @@
     "routedAutoPermissions": {
       "type": "string",
       "title": "Routed auto-mode permissions",
-      "description": "How auto mode decides tool calls from routed models",
-      "options": [
-        "claude-classifier",
-        "server-classifier-off"
-      ],
-      "required": true
+      "description": "How auto mode decides tool calls from routed models: claude-classifier or server-classifier-off. Unset follows whether the session has a first-party Anthropic login"
     }
   }
 }
