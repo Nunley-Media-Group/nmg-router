@@ -1,0 +1,63 @@
+**Issue**: #3
+**Date**: 2026-10-25
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/2-add-the-provider-catalog-with-provider-aware-login-and-logout/
+
+# File: tests/features/routed-turns.feature
+# Generated from: specs/3-answer-routed-model-turns-through-provider-adapters-with-streaming-tools-thinking-and-clear-errors/requirements.md
+Feature: Routed-model turns through provider adapters
+
+  @SCN001
+  Scenario: Claude steps pass through untouched
+    Given a step whose model is "claude-haiku-5-5"
+    When turn.step fires
+    Then the hook yields next(e) unchanged with no HTTP request, subprocess or credential read
+
+  @SCN002
+  Scenario: A routed model completes an agentic turn
+    Given a step for "opencode-go/kimi-k3.1-pro" with a stored credential and responses that call Read, then Edit, then answer
+    When each step fires
+    Then each request carries the captured system prompt, the session conversation and the offered tools, and the turn ends with the model's final text without calling next
+
+  @SCN003
+  Scenario: Every wire format maps to the same chunks
+    Given Chat Completions, Responses, Codex and Anthropic Messages streams
+    When each is translated
+    Then text, tool calls, reasoning, stop reason and usage map to the same engine chunks
+
+  @SCN004
+  Scenario: Switching models keeps context
+    Given a session that answered on a Claude model
+    When the user switches to a routed model and back
+    Then the routed request contains the Claude turns and the next Claude step passes through
+
+  @SCN005
+  Scenario: Guards and identity apply to every routed request
+    Given a routed OpenCode Go step
+    When it is sent and answered
+    Then the request and response guards run, the request goes only to the provider host, and it carries the session's x-opencode-session id and "nmg-router/<version>" user agent
+
+  @SCN006
+  Scenario: Only offered tools are sent with generated schemas
+    Given the generated built-in tool schema registry and a step offering Read, Edit and an MCP tool
+    When the request is built
+    Then Read and Edit are sent with their schemas, the MCP tool is left out and named in a debug log, and a stale registry fails its test
+
+  @SCN007
+  Scenario: Responses stream through curl with secrets on stdin
+    Given a fake curl child that emits SSE pieces
+    When a routed step runs
+    Then text chunks arrive before the child ends, tool calls arrive once complete, secrets appear only on stdin, an interrupt stops the child, and speed metrics are recorded
+
+  @SCN008
+  Scenario: Thinking effort is clamped per model
+    Given a model supporting only low and medium
+    When a step arrives with effort max
+    Then the request carries effort medium and the status line shows the model id and "thinking medium"
+
+  @SCN009
+  Scenario: Failures end with a clear message and no fallback
+    Given a routed step that gets a 429 with retry-after
+    When it runs
+    Then it ends with a rate-limit message naming the provider and the wait, the status line shows the error, and next is never called
