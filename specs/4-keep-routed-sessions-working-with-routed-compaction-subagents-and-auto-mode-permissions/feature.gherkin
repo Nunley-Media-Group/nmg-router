@@ -1,0 +1,51 @@
+**Issue**: #4
+**Date**: 2026-10-25
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/3-answer-routed-model-turns-through-provider-adapters-with-streaming-tools-thinking-and-clear-errors/
+
+# File: tests/features/routed-sessions.feature
+# Generated from: specs/4-keep-routed-sessions-working-with-routed-compaction-subagents-and-auto-mode-permissions/requirements.md
+Feature: Routed compaction, subagents and auto-mode permissions
+
+  @SCN001
+  Scenario: Compaction on a routed model uses its provider
+    Given "opencode-go/glm-5.1" is selected
+    When the user runs "/compact keep the plan"
+    Then the summary comes from OpenCode Go with "keep the plan" in its request, the conversation becomes one summary message, and no request goes to Anthropic
+
+  @SCN002
+  Scenario: Threshold follows the routed context window and failures do not fall back
+    Given a routed model with a 128000-token context window
+    When a turn ends with 108800 routed context tokens, and later the provider fails while summarizing
+    Then compaction starts, and the failed compaction is skipped with a notice naming the provider and no Claude request
+
+  @SCN003
+  Scenario: Subagents are answered by their own model
+    Given a Claude main loop with a subagent on "opencode-go/glm-5.3", and a routed main loop with a Claude subagent
+    When each subagent's steps fire
+    Then the routed subagent uses its own transcript and model, and the Claude subagent passes through
+
+  @SCN004
+  Scenario: Default permission mode follows first-party login presence
+    Given the routed auto-mode permissions row is unset
+    When the session has, or lacks, a first-party Anthropic login
+    Then the effective mode is "claude-classifier", or "server-classifier-off"
+
+  @SCN005
+  Scenario: Claude classifier decides routed Bash calls
+    Given mode "claude-classifier" and auto mode on
+    When a routed Bash call reaches tool.check with no rule settling it
+    Then the decision is the classifier's allow, ask or deny, and a failed classification gives ask
+
+  @SCN006
+  Scenario: Server classifier off asks the person
+    Given mode "server-classifier-off" and auto mode on
+    When a routed Bash call needs a verdict
+    Then the hook answers ask with an nmg-router reason instead of a blocked call
+
+  @SCN007
+  Scenario: Rules and Claude calls keep their verdicts
+    Given either mode
+    When a call matches an allow or deny rule, or comes from a Claude model
+    Then Claude Code's own verdict is returned unchanged
