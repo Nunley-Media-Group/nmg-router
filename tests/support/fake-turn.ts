@@ -60,9 +60,10 @@ export function compactNext(signal: AbortSignal = new AbortController().signal):
   return Object.assign(next, { signal, calls });
 }
 
-// The host's SubagentHandback, as 2.1.310 runs it: a subagent's call with a
-// non-empty `message` delivers that report into its caller's transcript. Answers
-// whether a report was delivered.
+// The host's SubagentHandback, as 2.1.310 and 2.1.311 run it: a subagent's call
+// with a non-empty `message` delivers that report into its caller's transcript,
+// though the tool is never in the session listing a mod reads. Answers whether a
+// report was delivered.
 export function deliverHandback(
   toolUses: readonly { readonly name: string; readonly input: unknown }[],
   caller: { role: "user" | "assistant"; content: { type: string; [field: string]: unknown }[] }[],

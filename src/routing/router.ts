@@ -423,7 +423,7 @@ export function createRouter(
     const messages = e.agentId === undefined ? view.apply(MAIN_LOOP, transcript) : transcript;
     const turns = normalizeMessages(messages, { id: e.model, vision: listed?.vision ?? metadata?.vision ?? false });
 
-    const names = offeredToolNames(captured?.toolNames ?? listing.map((tool) => tool.name), transcript, listing, e.agentId);
+    const names = offeredToolNames(captured?.toolNames ?? listing.map((tool) => tool.name), transcript, e.agentId);
     const offered = offeredTools(names, listing);
     if (offered.skipped.length > 0) {
       host.ui.log(`routed request left out tools without a schema: ${offered.skipped.join(", ")}`, { to: "debug" });

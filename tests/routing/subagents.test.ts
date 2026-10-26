@@ -10,13 +10,15 @@ const CLAUDE = "claude-sonnet-5-5";
 // AC3: each loop's steps are answered by the model they name. A routed subagent reads its own transcript
 // and prompt, a Claude subagent passes through, and no subagent step moves the main status line.
 describe("subagent steps by their own model", () => {
+  // As on 2.1.311, `prompt.compose` fires for main-loop renders only and carries no agent id, so the capture a
+  // routed subagent reads is the latest main-loop render for its model.
   it("answers a routed subagent from its own transcript and captured prompt, and never calls next", async () => {
     const h = harness({
       http: replies(chatTurn({ text: "Sub done." })),
       session: { id: SESSION, messages: [userText("Main task")], agents: { "agent-1": [userText("Sub task")] } },
     });
     await signIn(h.engine);
-    remember(h.capture, MODEL, "SUBAGENT PROMPT");
+    remember(h.capture, MODEL, "CAPTURED PROMPT");
     const next = spyNext();
 
     const { chunks } = await collect(routeStep(h.router, step(0, MODEL, { agentId: "agent-1" }), next));
@@ -24,7 +26,7 @@ describe("subagent steps by their own model", () => {
     expect(textOf(chunks)).toBe("Sub done.");
     expect(next.calls).toEqual([]);
     const body = JSON.parse(postsTo(h.engine, CHAT_URL)[0]?.body ?? "{}") as { messages: unknown[] };
-    expect(body.messages[0]).toEqual({ role: "system", content: "SUBAGENT PROMPT" });
+    expect(body.messages[0]).toEqual({ role: "system", content: "CAPTURED PROMPT" });
     expect(JSON.stringify(body.messages)).toContain("Sub task");
     expect(JSON.stringify(body.messages)).not.toContain("Main task");
     expect(h.tracker.model("agent-1")).toBe(MODEL);
@@ -59,10 +61,11 @@ describe("subagent steps by their own model", () => {
   });
 });
 
+// The session's tool listing as 2.1.311 answers `$.tool.list()` during a subagent step: the main loop's
+// tools, with no SubagentHandback.
 const HOST_TOOLS = [
   { name: "Read", description: "Read a file", mcp: false },
   { name: "WebFetch", description: "Fetch a page", mcp: false },
-  { name: "SubagentHandback", description: "Deliver your final report", mcp: false },
 ];
 
 // A subagent transcript that loaded WebFetch through ToolSearch.
@@ -72,9 +75,10 @@ const SUB_TRANSCRIPT: ApiMessageInput[] = [
   { role: "user", content: [{ type: "tool_result", tool_use_id: "search_1", content: [{ type: "tool_reference", tool_name: "WebFetch" }] }] },
 ];
 
+type OfferedBody = { tools?: { function: { name: string; description?: string } }[] };
+
 function offeredNames(body: string | undefined): string[] {
-  const parsed = JSON.parse(body ?? "{}") as { tools?: { function: { name: string } }[] };
-  return (parsed.tools ?? []).map((tool) => tool.function.name);
+  return ((JSON.parse(body ?? "{}") as OfferedBody).tools ?? []).map((tool) => tool.function.name);
 }
 
 // AC3, FR8: a routed subagent can hand its report back, and keeps the tools it loaded.
@@ -88,14 +92,30 @@ describe("routed subagent tools", () => {
       session: { id: SESSION, messages: main, agents: { "agent-1": SUB_TRANSCRIPT } },
     });
     await signIn(h.engine);
-    remember(h.capture, MODEL, "SUBAGENT PROMPT", ["Read"]);
+    remember(h.capture, MODEL, "CAPTURED PROMPT", ["Read"]);
 
     const { result } = await collect(routeStep(h.router, step(0, MODEL, { agentId: "agent-1" }), spyNext()));
 
-    expect(offeredNames(postsTo(h.engine, CHAT_URL)[0]?.body)).toEqual(["Read", "WebFetch", "SubagentHandback"]);
+    const body = postsTo(h.engine, CHAT_URL)[0]?.body;
+    expect(offeredNames(body)).toEqual(["Read", "WebFetch", "SubagentHandback"]);
+    const handback = (JSON.parse(body ?? "{}") as OfferedBody).tools?.find((tool) => tool.function.name === "SubagentHandback");
+    expect(handback?.function.description).toContain("Deliver your final report to the agent that spawned you");
     const toolUses = (result as TurnStepResult).toolUses;
     expect(deliverHandback(toolUses, main as never)).toBe(true);
     expect(JSON.stringify(main)).toContain("The notes are fixed.");
+  });
+
+  it("offers SubagentHandback to a routed subagent under a Claude main loop, with no capture for its model", async () => {
+    const h = harness({
+      http: replies(chatTurn({ text: "Sub." })),
+      tools: HOST_TOOLS,
+      session: { id: SESSION, messages: [userText("Main task")], agents: { "agent-1": [userText("Sub task")] } },
+    });
+    await signIn(h.engine);
+
+    await collect(routeStep(h.router, step(0, MODEL, { agentId: "agent-1" }), spyNext()));
+
+    expect(offeredNames(postsTo(h.engine, CHAT_URL)[0]?.body)).toEqual(["Read", "WebFetch", "SubagentHandback"]);
   });
 
   it("does not offer SubagentHandback to the routed main loop", async () => {

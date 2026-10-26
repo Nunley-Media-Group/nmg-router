@@ -3,7 +3,7 @@ import type { ApiMessageInput } from "../translate/messages.ts";
 import type { ToolDef } from "../translate/types.ts";
 import type { JsonSchema } from "./json-schema.ts";
 import { NO_MCP_SCHEMAS, type McpSchemaSource } from "./mcp-schemas.ts";
-import { SUBAGENT_HANDBACK, TOOL_SCHEMAS } from "./supplement-schemas.ts";
+import { SUBAGENT_HANDBACK, SUPPLEMENT_TOOL_DESCRIPTIONS, TOOL_SCHEMAS } from "./supplement-schemas.ts";
 
 // Only the tools a step offers are sent, each with its schema. A tool whose schema
 // is unknown is skipped and named, so the caller can log it.
@@ -36,16 +36,16 @@ export function searchLoadedTools(messages: readonly ApiMessageInput[]): string[
 
 // The names a routed step offers, deduplicated in order: the captured names, the
 // tools the loop loaded through ToolSearch, then SubagentHandback in a subagent's
-// loop when the host lists it. The main loop has no caller to hand back to, so it
-// is never offered SubagentHandback, even when a subagent's render captured it.
+// loop. The host's tool listing is the session's and never names SubagentHandback,
+// so a subagent step is offered it by its agent id alone. The main loop has no
+// caller to hand back to, so it is never offered SubagentHandback.
 export function offeredToolNames(
   captured: readonly string[],
   messages: readonly ApiMessageInput[],
-  listed: readonly ToolInfo[],
   agentId: string | undefined,
 ): string[] {
   const names = new Set([...captured, ...searchLoadedTools(messages)]);
-  if (agentId !== undefined && listed.some((tool) => tool.name === SUBAGENT_HANDBACK)) names.add(SUBAGENT_HANDBACK);
+  if (agentId !== undefined) names.add(SUBAGENT_HANDBACK);
   else names.delete(SUBAGENT_HANDBACK);
   return [...names];
 }
@@ -68,7 +68,8 @@ export function offeredTools(
       skipped.push(name);
       continue;
     }
-    tools.push({ name, description: tool?.description ?? "", schema });
+    // A tool the host does not list takes its supplement description. Only a name with a schema gets here.
+    tools.push({ name, description: tool?.description ?? SUPPLEMENT_TOOL_DESCRIPTIONS[name] ?? "", schema });
   }
   return { tools, skipped };
 }
