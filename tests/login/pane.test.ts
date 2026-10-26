@@ -80,6 +80,37 @@ describe("pane picker", () => {
     expect(pane.isOpen()).toBe(false);
   });
 
+  it("ends a step whose pane the host leaves undrawn, instead of waiting on it", async () => {
+    // Opened outside the person's command at 91 columns, the host does not place it.
+    const engine = fakeEngine({ platform: "linux", columns: 91 });
+    const pane = createPaneController();
+
+    expect(await pane.open(engine, selectView(3))).toEqual({ kind: "cancelled" });
+    expect(engine.recorded.ui).toEqual(["The login pane could not be shown: unasked below 144 columns (91 now)"]);
+    expect(engine.recorded.paneCloses).toEqual([PANE_ID]);
+    expect(pane.isOpen()).toBe(false);
+  });
+
+  it("holds a begun pane across steps and closes it at the end", async () => {
+    const engine = fakeEngine({ platform: "linux", columns: 91 });
+    const pane = createPaneController();
+    expect(await engine.asking(() => pane.begin(engine, "/login"))).toEqual({ isPlaced: true });
+
+    const picked = pane.open(engine, selectView(3));
+    nodesOf(pane.draw(elements), "Select")[0]?.props.onSelect("p1");
+    expect(await picked).toEqual({ kind: "picked", value: "p1" });
+    expect(nodesOf(pane.draw(elements), "Text").map((node) => node.props.children)).toEqual(["Working…"]);
+
+    const submitted = pane.open(engine, { kind: "secret", title: "t", label: "l", hint: [] });
+    nodesOf(pane.draw(elements), "Input")[0]?.props.onSubmit("");
+    expect(await submitted).toEqual({ kind: "submitted", value: "" });
+    expect(engine.recorded.panes).toHaveLength(1);
+    expect(engine.recorded.paneCloses).toEqual([]);
+
+    await pane.end();
+    expect(engine.recorded.paneCloses).toEqual([PANE_ID]);
+  });
+
   it("resolves cancelled when the host closes the pane", async () => {
     const pane = createPaneController();
     const cancelled = pane.open(fakeEngine({ platform: "linux" }), selectView(3));

@@ -10,7 +10,7 @@ import { createServices } from "../src/services.ts";
 // or path only where it is written literally at a call site, so the port spells
 // out each environment name and store key the mod uses. One pane serves the
 // engine: a command opens it, and the render and close hooks draw it and settle it.
-// The command hook answers at once and the flow runs after it (command-flow.ts).
+// The command hook opens the pane, answers, and the flow runs after it (command-flow.ts).
 
 function unknownName(kind: string, name: string): Error {
   return new Error(`nmg-router does not use the ${kind} "${name}"`);
@@ -120,7 +120,7 @@ export const register: Register = (on) => {
       },
     };
     const services = createServices(port, { pane });
-    return flows.start(flowHost, e, (handoff) =>
+    return flows.start(flowHost, e, pane, (handoff) =>
       e.command === "login" ? handleLogin(port, e, handoff, services) : handleLogout(port, e, handoff, services),
     );
   }).catch((_, e, next) =>

@@ -6,6 +6,11 @@ import { applyInput, maskOf } from "./masked-input.ts";
 // One pane, drawn from the controller's current view. `open` resolves once the
 // person picks, submits or closes; a close raised by the host resolves it as
 // cancelled. A pending pane settles exactly once.
+//
+// The host places a pane at any width only when the person's command, prompt or
+// press is behind its open; one opened later waits undrawn below 144 columns. A
+// command therefore opens the pane with `begin` inside its hook and holds it:
+// each step's `open` swaps the drawn view, and `end` closes it after the flow.
 
 export const PANE_ID = "nmg-router-login";
 
@@ -54,7 +59,14 @@ type Pending = {
   settled: boolean;
 };
 
+export type PaneBegin = { readonly isPlaced: true } | { readonly isPlaced: false; readonly reason: string };
+
 export type PaneController = {
+  // Opens and holds the pane for a command's flow. Called inside the command's
+  // hook, so the open answers the person's command and is placed at any width.
+  begin(host: PaneHost, title: string): Promise<PaneBegin>;
+  // Closes a held pane once the flow is done; a pane already gone is left alone.
+  end(): Promise<void>;
   open(host: PaneHost, view: PaneView): Promise<PaneResult>;
   draw(elements: PaneElements): RenderElement;
   // Called on `ui.close` for the pane. A close the controller asked for has
@@ -65,6 +77,8 @@ export type PaneController = {
 
 export function createPaneController(): PaneController {
   let pending: Pending | undefined;
+  // The host of a pane held open by `begin`, until `end` or the host closes it.
+  let held: PaneHost | undefined;
 
   function settle(result: PaneResult, closePane: boolean): void {
     const current = pending;
@@ -72,6 +86,11 @@ export function createPaneController(): PaneController {
     current.settled = true;
     pending = undefined;
     current.resolve(result);
+    if (held !== undefined) {
+      // A held pane stays up for the flow's next step.
+      redraw(current);
+      return;
+    }
     if (closePane) current.host.ui.close({ id: PANE_ID }).catch(() => undefined);
   }
 
@@ -170,21 +189,45 @@ export function createPaneController(): PaneController {
     return Box({ children });
   }
 
+  const OPEN_ARGS = { id: PANE_ID, focus: true, closeOnEscape: true, holdToasts: true } as const;
+
   return {
+    async begin(host, title) {
+      settle({ kind: "cancelled" }, false);
+      held = host;
+      try {
+        const opened = await host.ui.open({ ...OPEN_ARGS, title });
+        if (opened.isPlaced) return { isPlaced: true };
+        await this.end();
+        return { isPlaced: false, reason: opened.reason };
+      } catch {
+        held = undefined;
+        return { isPlaced: false, reason: "the host refused to open it" };
+      }
+    },
+    async end() {
+      const host = held;
+      held = undefined;
+      settle({ kind: "cancelled" }, false);
+      if (host !== undefined) await host.ui.close({ id: PANE_ID }).catch(() => undefined);
+    },
     async open(host, view) {
       settle({ kind: "cancelled" }, false);
       const result = new Promise<PaneResult>((resolve) => {
         pending = { view, host, resolve, query: "", secret: "", typed: "", settled: false };
       });
+      if (held !== undefined) {
+        // The held pane is already placed; reopening it would be an unasked open.
+        host.ui.invalidate("ui.render");
+        return result;
+      }
       try {
-        const opened = await host.ui.open({
-          id: PANE_ID,
-          title: view.title,
-          focus: true,
-          closeOnEscape: true,
-          holdToasts: true,
-        });
-        if (!opened.isPlaced) host.ui.log(`The login pane waits for a wider terminal: ${opened.reason}`);
+        const opened = await host.ui.open({ ...OPEN_ARGS, title: view.title });
+        if (!opened.isPlaced) {
+          // An undrawn pane cannot be answered, so the step ends instead of waiting.
+          host.ui.log(`The login pane could not be shown: ${opened.reason}`);
+          settle({ kind: "cancelled" }, true);
+        }
       } catch {
         settle({ kind: "cancelled" }, false);
       }
@@ -192,7 +235,11 @@ export function createPaneController(): PaneController {
     },
     draw(elements) {
       const state = pending;
-      if (state === undefined) return elements.Box({ children: [] });
+      if (state === undefined) {
+        // Between a held pane's steps, while the flow works on the last answer.
+        const working = elements.Text({ dimColor: true, children: "Working…" });
+        return elements.Box({ children: held === undefined ? [] : [working] });
+      }
       switch (state.view.kind) {
         case "select":
           return drawSelect(elements, state, state.view);
@@ -203,6 +250,7 @@ export function createPaneController(): PaneController {
       }
     },
     closedByHost() {
+      held = undefined;
       settle({ kind: "cancelled" }, false);
     },
     isOpen() {

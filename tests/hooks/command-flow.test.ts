@@ -2,11 +2,16 @@ import type { CommandRunInput, CommandRunResult } from "claude-code";
 import { describe, expect, it, vi } from "vitest";
 import { register } from "../../hooks/register.ts";
 import { createCommandFlows } from "../../src/login/command-flow.ts";
+import { createPaneController, PANE_ID } from "../../src/login/pane.ts";
 import { fakeEngine, type FakeEngine } from "../support/fake-engine.ts";
 
 // The host gives a command.run hook 10 s of its own time, and a person's picks
 // are not a `$` call. These tests drive the registered hooks and check the hook
 // answers before anyone picks, so a pick at any pace still reaches the flow.
+// The terminal is 91 columns wide, below the host's 144-column floor for a pane
+// the person did not ask for, so a pane opened after the hook would not be drawn.
+
+const NARROW = 91;
 
 type Hook = (...args: unknown[]) => unknown;
 type Node = { readonly props: Record<string, unknown> };
@@ -23,7 +28,12 @@ function registered() {
 }
 
 function inputOf(command: string, origin: CommandRunInput["origin"] = { kind: "composer" }): CommandRunInput {
-  return { command, args: "", origin, presentation: { isFullscreen: false, columns: 120 } };
+  return { command, args: "", origin, presentation: { isFullscreen: false, columns: NARROW } };
+}
+
+// Runs the command hook as the engine runs it for the person's command.
+function runCommand(hooks: Map<string, Hook>, engine: FakeEngine, input: CommandRunInput, next: unknown) {
+  return engine.asking(() => hooks.get("command.run")?.(engine, input, next));
 }
 
 const element = (props: Record<string, unknown>): Node => ({ props });
@@ -61,60 +71,88 @@ function reentrant(engine: FakeEngine, hooks: Map<string, Hook>, next: (e: Comma
 
 describe("command.run under the host's hook budget", () => {
   for (const command of ["login", "logout"]) {
-    it(`answers /${command} at once, before the person picks, without calling next(e)`, async () => {
+    it(`answers /${command} once its pane is open, before the person picks, without calling next(e)`, async () => {
       const { hooks } = registered();
-      const engine = fakeEngine({ platform: "macos" });
+      const engine = fakeEngine({ platform: "macos", columns: NARROW });
       const next = vi.fn(async () => ({ text: "built-in" }));
 
-      const answer = await hooks.get("command.run")?.(engine, inputOf(command), next);
+      const answer = await runCommand(hooks, engine, inputOf(command), next);
 
       expect(answer).toEqual({});
-      await vi.waitFor(() => expect(engine.recorded.panes).toHaveLength(1));
+      expect(engine.recorded.panes).toHaveLength(1);
       expect(next).not.toHaveBeenCalled();
       expect(engine.recorded.ui.join("\n")).not.toContain("cancelled");
     });
 
+    it(`draws the /${command} picker at ${NARROW} columns, in the pane opened inside the hook`, async () => {
+      const { hooks } = registered();
+      const engine = fakeEngine({ platform: "macos", columns: NARROW });
+
+      await runCommand(hooks, engine, inputOf(command), vi.fn());
+
+      await vi.waitFor(() => expect(find(drawPane(hooks), "pick").props.options).toBeDefined());
+      expect(engine.recorded.panes).toEqual([expect.objectContaining({ id: PANE_ID, focus: true })]);
+      // Nothing says the pane is waiting or could not be shown.
+      expect(engine.recorded.ui).toEqual([]);
+    });
+
     it(`hands an Anthropic pick on /${command} to next(e) through a re-run, whenever the pick comes`, async () => {
       const { hooks } = registered();
-      const engine = fakeEngine({ platform: "macos" });
+      const engine = fakeEngine({ platform: "macos", columns: NARROW });
       const next = vi.fn(async (e: CommandRunInput) => ({ text: `built-in ${e.command}` }));
       const host = reentrant(engine, hooks, next);
 
-      expect(await hooks.get("command.run")?.(host, inputOf(command), next)).toEqual({});
-      await vi.waitFor(() => expect(engine.recorded.panes).toHaveLength(1));
+      expect(await engine.asking(() => hooks.get("command.run")?.(host, inputOf(command), next))).toEqual({});
+      await vi.waitFor(() => expect(find(drawPane(hooks), "pick")).toBeDefined());
       const onSelect = find(drawPane(hooks), "pick").props.onSelect as (value: string) => void;
       onSelect("anthropic");
 
       await vi.waitFor(() => expect(next).toHaveBeenCalledTimes(1));
       expect(engine.recorded.commands).toEqual([{ command, args: "" }]);
       expect(next.mock.calls[0]?.[0]).toMatchObject({ command, origin: { kind: "plugin" } });
+      // The mod's pane closes before the built-in command draws its own dialog.
+      expect(engine.recorded.paneCloses).toEqual([PANE_ID]);
       // The built-in command prints its own output; the mod adds no line for it.
       expect(engine.recorded.ui).not.toContain(`built-in ${command}`);
     });
   }
 
-  it("shows a routed outcome as a transcript line once the person answers", async () => {
+  it("draws the next step in the same pane after a pick, with no second open", async () => {
     const { hooks } = registered();
-    const engine = fakeEngine({ platform: "macos" });
+    const engine = fakeEngine({ platform: "macos", columns: NARROW });
+
+    await runCommand(hooks, engine, inputOf("login"), vi.fn());
+    await vi.waitFor(() => expect(find(drawPane(hooks), "pick")).toBeDefined());
+    (find(drawPane(hooks), "pick").props.onSelect as (value: string) => void)("opencode-go");
+
+    await vi.waitFor(() => expect(find(drawPane(hooks), "secret")).toBeDefined());
+    expect(engine.recorded.panes).toHaveLength(1);
+    expect(engine.recorded.paneCloses).toEqual([]);
+  });
+
+  it("shows a routed outcome as a transcript line once the person answers, and closes the pane", async () => {
+    const { hooks } = registered();
+    const engine = fakeEngine({ platform: "macos", columns: NARROW });
     const next = vi.fn(async () => ({ text: "built-in" }));
 
-    await hooks.get("command.run")?.(engine, inputOf("login"), next);
-    await vi.waitFor(() => expect(engine.recorded.panes).toHaveLength(1));
+    await runCommand(hooks, engine, inputOf("login"), next);
+    await vi.waitFor(() => expect(find(drawPane(hooks), "cancel")).toBeDefined());
     (find(drawPane(hooks), "cancel").props.onPress as () => void)();
 
     await vi.waitFor(() => expect(engine.recorded.ui).toContain("Login cancelled."));
+    expect(engine.recorded.paneCloses).toEqual([PANE_ID]);
     expect(engine.recorded.commands).toEqual([]);
     expect(next).not.toHaveBeenCalled();
   });
 
   it("passes a plugin's run of /login on to the picker when no Anthropic pick is pending", async () => {
     const { hooks } = registered();
-    const engine = fakeEngine({ platform: "macos" });
+    const engine = fakeEngine({ platform: "macos", columns: NARROW });
     const next = vi.fn(async () => ({ text: "built-in" }));
     const origin = { kind: "plugin", name: "other" } as CommandRunInput["origin"];
 
-    expect(await hooks.get("command.run")?.(engine, inputOf("login", origin), next)).toEqual({});
-    await vi.waitFor(() => expect(engine.recorded.panes).toHaveLength(1));
+    expect(await runCommand(hooks, engine, inputOf("login", origin), next)).toEqual({});
+    expect(engine.recorded.panes).toHaveLength(1);
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -131,14 +169,29 @@ describe("command.run under the host's hook budget", () => {
 });
 
 describe("command flows", () => {
-  it("logs a generic line, not the error, when a flow fails", async () => {
+  it("logs a generic line, not the error, when a flow fails, and closes the pane", async () => {
     const engine = fakeEngine({ platform: "macos" });
-    const answer = createCommandFlows().start(engine, inputOf("login"), async () => {
+    const answer = await createCommandFlows().start(engine, inputOf("login"), createPaneController(), async () => {
       throw new Error("provider reply: secret-ish body");
     });
 
     expect(answer).toEqual({});
     await vi.waitFor(() => expect(engine.recorded.ui).toHaveLength(1));
     expect(engine.recorded.ui).toEqual(["/login stopped on an unexpected error. Nothing else was changed."]);
+    expect(engine.recorded.paneCloses).toEqual([PANE_ID]);
+  });
+
+  it("answers with the reason and runs no flow when the pane cannot be placed", async () => {
+    // Opened outside the person's command at 91 columns, the host leaves the pane undrawn.
+    const engine = fakeEngine({ platform: "macos", columns: NARROW });
+    const flow = vi.fn(async () => ({ text: "ran" }));
+
+    const answer = await createCommandFlows().start(engine, inputOf("logout"), createPaneController(), flow);
+
+    expect(answer).toEqual({
+      text: "The /logout pane could not be shown: unasked below 144 columns (91 now). Nothing was changed.",
+    });
+    expect(flow).not.toHaveBeenCalled();
+    expect(engine.recorded.paneCloses).toEqual([PANE_ID]);
   });
 });

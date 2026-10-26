@@ -17,6 +17,8 @@ export type FakeOptions = {
   // Answers a request by URL and method. Returning undefined means no route,
   // and the request fails as an unreachable host would.
   readonly http?: FakeHttpResponder;
+  // The terminal's width, for the host's pane placement rule. Wide by default.
+  readonly columns?: number;
 };
 
 export type FakeHttpRequest = {
@@ -60,7 +62,12 @@ export type Recorded = {
 export type FakeEngine = Pick<
   EngineInterface,
   "command" | "env" | "fs" | "http" | "process" | "session" | "settings" | "store" | "telemetry" | "ui"
-> & { readonly recorded: Recorded };
+> & {
+  readonly recorded: Recorded;
+  // Runs a hook as the engine runs one for the person's command: a pane opened
+  // before it settles is asked, and is placed at any width.
+  asking<T>(run: () => T | Promise<T>): Promise<T>;
+};
 
 const HOME: Record<FakePlatform, string> = {
   macos: "/Users/tester",
@@ -187,6 +194,9 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
   const kv = new Map<string, unknown>();
   const keyrings = new Map<string, string>();
   const keyringState = options.keyring ?? "working";
+  const columns = options.columns ?? 200;
+  let askingDepth = 0;
+  const askedPanes = new Set<string>();
 
   function uname(): ProcessRunResult {
     const name = { macos: "Darwin", linux: "Linux", windows: "Windows_NT", other: "FreeBSD" }[options.platform];
@@ -205,6 +215,14 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
 
   const engine = {
     recorded,
+    asking: async <T>(run: () => T | Promise<T>): Promise<T> => {
+      askingDepth += 1;
+      try {
+        return await run();
+      } finally {
+        askingDepth -= 1;
+      }
+    },
     command: {
       run: async (input: CommandRunArgs) => {
         recorded.commands.push(input);
@@ -272,9 +290,14 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       toast: (text: string) => {
         recorded.ui.push(text);
       },
+      // The host's rule: an open answering the person is placed at any width; one
+      // the plugin makes on its own waits below 144 columns, 110 once asked for.
       open: async (pane: FakePaneOpen) => {
         recorded.panes.push(pane);
-        return { isPlaced: true };
+        if (askingDepth > 0) askedPanes.add(pane.id);
+        const floor = askedPanes.has(pane.id) ? 110 : 144;
+        if (askingDepth > 0 || columns >= floor) return { isPlaced: true };
+        return { isPlaced: false, reason: `unasked below ${floor} columns (${columns} now)` };
       },
       close: async (pane: { id: string }) => {
         recorded.paneCloses.push(pane.id);
