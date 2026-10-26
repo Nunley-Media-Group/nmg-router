@@ -78,6 +78,16 @@
       ],
       "slot": "body",
       "order": 500
+    },
+    {
+      "id": "project.verification",
+      "path": "steering/snippets/project-verification.md",
+      "consumers": [
+        "sdlc-verify-code",
+        "worker:verify"
+      ],
+      "slot": "body",
+      "order": 600
     }
   ],
   "extensions": [],
