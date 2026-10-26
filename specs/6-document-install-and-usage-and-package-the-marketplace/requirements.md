@@ -31,13 +31,13 @@ The README describes behavior from the approved specs for #2 (provider catalog, 
 **Given** the README
 **When** a test checks its level-2 headings and their sections
 **Then** it has, in this order, the sections Requirements, Installation, Logging in to providers, Choosing a model, Thinking levels, Auto-mode permissions, Custom providers and filters, Known limits, Credential boundary, Credential security and Contributing, and:
-- Requirements names Claude Code 2.1.310 or later, the macOS Keychain, Windows Credential Manager and the Linux Secret Service, and states that nothing else needs installing;
+- Requirements names Claude Code 2.1.310 or later and states that nothing else needs installing;
 - Logging in to providers covers `/login`, `/logout` and that choosing Anthropic runs Claude Code's own login;
 - Choosing a model covers the `/model` hub and `provider/model` ids;
 - Thinking levels states that the level is clamped to what the routed model supports;
 - Auto-mode permissions names the `/config` row "Routed auto-mode permissions" and the values `claude-classifier` and `server-classifier-off`;
 - Custom providers and filters names `config.json`, `disabledProviders` and `enabledModels`, and states that the file never holds a key;
-- Credential boundary states that Claude credentials stay with Claude Code and that provider credentials stay in the OS keyring;
+- Credential boundary states that Claude credentials stay with Claude Code and that provider credentials stay in the encrypted vault;
 - the existing Credential security section keeps every term its current test checks
 
 ## Functional Requirements

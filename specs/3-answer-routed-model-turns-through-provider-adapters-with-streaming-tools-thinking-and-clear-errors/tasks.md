@@ -119,7 +119,7 @@
 **Type**: Create
 **Depends**: T009, T010
 **Acceptance**:
-- AC1: Claude ids and aliases yield exactly what `next(e)` yields, with zero spawn, HTTP and keyring calls
+- AC1: Claude ids and aliases yield exactly what `next(e)` yields, with zero spawn, HTTP and credential-store calls
 - AC2: three steps (Read, Edit, final text) each send the captured system prompt, the session messages including earlier tool calls and results, and only the offered tools; `next` is never called; the last step yields the final text and `end_turn`
 - AC4: a routed request after Claude turns contains them; a following Claude step passes through
 - AC5: a response naming `anthropic/claude-opus-5-5` yields no content chunk; OpenCode Go requests in one session share one `x-opencode-session` and send `User-Agent: nmg-router/<plugin.json version>`; request hosts equal the provider host
