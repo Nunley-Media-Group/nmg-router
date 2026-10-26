@@ -15,12 +15,15 @@ function recorder() {
 describe("hooks wiring", () => {
   // One command.run hook serves /login and /logout and passes every other command on.
   // The host needs each port's functions spelled at their call sites, so the two
-  // commands share one hook rather than two copies of the same port.
-  it("registers the command hook, the pane render and the pane close, and nothing else", () => {
+  // commands share one hook rather than two copies of the same port. The routed
+  // turns add the compose capture and the turn.step hook, which answers routed models.
+  it("registers the command hook, the compose capture, the turn step, the pane render and the pane close, and nothing else", () => {
     const { on, calls } = recorder();
     register(on, {} as never);
     expect(calls).toEqual([
       { event: "command.run", matcher: undefined },
+      { event: "prompt.compose", matcher: undefined },
+      { event: "turn.step", matcher: undefined },
       { event: "ui.render", matcher: { component: "Pane", requestId: PANE_ID } },
       { event: "ui.close", matcher: { id: PANE_ID } },
     ]);

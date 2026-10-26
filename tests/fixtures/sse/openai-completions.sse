@@ -1,0 +1,18 @@
+data: {"model":"fixture-model-1","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Let me look."}}]}
+
+data: {"model":"fixture-model-1","choices":[{"index":0,"delta":{"content":"Reading "}}]}
+
+data: {"model":"fixture-model-1","choices":[{"index":0,"delta":{"content":"the file."}}]}
+
+data: {"model":"fixture-model-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"Read","arguments":""}}]}}]}
+
+data: {"model":"fixture-model-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"file_"}}]}}]}
+
+data: {"model":"fixture-model-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"path\":\"notes.txt\"}"}}]}}]}
+
+data: {"model":"fixture-model-1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"model":"fixture-model-1","choices":[],"usage":{"prompt_tokens":120,"completion_tokens":15,"prompt_tokens_details":{"cached_tokens":20}}}
+
+data: [DONE]
+

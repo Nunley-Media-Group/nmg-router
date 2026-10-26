@@ -1,6 +1,6 @@
 import { apiKeyLogin, keyCheck } from "../../auth/api-key-login.ts";
 import { openAiModelsList } from "../../models/openai-models-list.ts";
-import type { ProviderPlugin, ResolvedWire, WireFormat } from "../types.ts";
+import type { HeaderContext, ProviderPlugin, ResolvedWire, WireFormat } from "../types.ts";
 
 // OpenCode Go serves each model over the wire its family uses, so the wire is
 // resolved per model, in this order: a per-id override, the bundled metadata,
@@ -8,6 +8,16 @@ import type { ProviderPlugin, ResolvedWire, WireFormat } from "../types.ts";
 
 const BASE_URL = "https://opencode.ai/inference/go";
 const HEADERS = { "User-Agent": "nmg-router" };
+
+// A routed request names the mod's version and carries one session id, so the
+// service can tell the traffic apart. The listing and key check keep HEADERS.
+function routedHeaders({ version, sessionId }: HeaderContext): Record<string, string> {
+  return {
+    ...HEADERS,
+    ...(version === undefined ? {} : { "User-Agent": `nmg-router/${version}` }),
+    ...(sessionId === undefined ? {} : { "x-opencode-session": sessionId }),
+  };
+}
 
 const WIRE_OVERRIDES: ReadonlyMap<string, WireFormat> = new Map<string, WireFormat>([
   ["deepseek-v4-flash", "openai-responses"],
@@ -31,7 +41,7 @@ export function openCodeWire(model: string, metadataWire?: WireFormat): Resolved
 }
 
 export const openCodeGo: ProviderPlugin = {
-  identity: { id: "opencode-go", name: "OpenCode Go", baseUrl: BASE_URL, headers: () => HEADERS },
+  identity: { id: "opencode-go", name: "OpenCode Go", baseUrl: BASE_URL, headers: routedHeaders },
   login: apiKeyLogin({ validate: keyCheck(`${BASE_URL}/v1/models`, () => HEADERS) }),
   models: openAiModelsList({ url: `${BASE_URL}/v1/models`, headers: () => HEADERS }),
   wire: openCodeWire,

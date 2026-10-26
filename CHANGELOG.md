@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-26
+
+### Changed
+
+- Answer routed-model turns through provider adapters with streaming, tools, thinking and clear errors (#3)
+
 ## [0.5.0] - 2026-10-26
 
 ### Fixed
