@@ -1,19 +1,29 @@
 import type { EngineInterface, Register } from "claude-code";
+import { createAutoTrigger, type AutoTrigger, type TriggerDeps } from "../src/compaction/auto-trigger.ts";
+import { compactFailure, compactSession, type CompactDeps } from "../src/compaction/compact-hook.ts";
+import { createRoutedView } from "../src/compaction/routed-view.ts";
 import { createCommandFlows, type FlowHost } from "../src/login/command-flow.ts";
 import { handleLogin } from "../src/login/login-command.ts";
 import { handleLogout } from "../src/login/logout-command.ts";
 import { createPaneController, PANE_ID } from "../src/login/pane.ts";
+import { createPersonApproval } from "../src/permissions/person-approval.ts";
+import { createPermissionModeTracker } from "../src/permissions/permission-mode.ts";
+import { createModeReader, type PermissionMode } from "../src/permissions/mode.ts";
+import { checkFailed, checkRoutedTool, type ToolCheckDeps } from "../src/permissions/tool-check.ts";
 import { createComposeCapture } from "../src/routing/compose-capture.ts";
 import { createRouter, type Router, type RouterHost } from "../src/routing/router.ts";
+import { createSessionTracker } from "../src/routing/session-tracker.ts";
 import { routeStep, routeStepFailed } from "../src/routing/turn-step.ts";
 import { createServices } from "../src/services.ts";
 
-// Wires /login, /logout, the login pane and the routed turns to src/. The host
-// reads a name, key or path only where it is written literally at a call site, so
-// the port spells out each environment name and store key the mod uses. One pane
-// serves the engine: a command opens it, and the render and close hooks draw it and
-// settle it. The command hook opens the pane, answers, and the flow runs after it
-// (command-flow.ts). The turn hooks answer routed models and pass Claude through.
+// Wires /login, /logout, the login pane, the routed turns, routed compaction and
+// routed auto-mode permissions to src/. The host reads a name, key or path only
+// where it is written literally at a call site, so the port spells out each
+// environment name and store key the mod uses. One pane serves the engine: a
+// command opens it, and the render and close hooks draw it and settle it. The
+// command hook opens the pane, answers, and the flow runs after it (command-flow.ts).
+// The turn hooks answer routed models and pass Claude through. The compaction and
+// permission hooks answer routed calls and pass Claude's through.
 
 function unknownName(kind: string, name: string): Error {
   return new Error(`nmg-router does not use the ${kind} "${name}"`);
@@ -111,22 +121,63 @@ function hostPort($: EngineInterface): RouterHost {
       focus: (args) => $.ui.focus(args),
       invalidate: (event) => $.ui.invalidate(event),
       status: (text) => $.ui.status(text),
+      ask: (question, options) => $.ui.ask(question, options),
     },
     session: {
       id: () => $.session.id(),
       messages: (args) => $.session.messages({ as: "api", agentId: args.agentId }),
+      model: () => $.session.model(),
+      cwd: () => $.session.cwd(),
+      authorize: () => $.session.authorize(),
     },
+    model: { classify: (text, labels) => $.model.classify(text, labels) },
+    config: { list: () => $.config.list() },
+    clock: { after: (ms, fn) => $.clock.after(ms, fn) },
     prompt: { compose: (args) => $.prompt.compose(args) },
     tool: { list: () => $.tool.list() },
     pluginRoot: () => $.plugin.root,
   };
 }
 
-export const register: Register = (on) => {
+export const register: Register = (on, options) => {
   const pane = createPaneController();
   const flows = createCommandFlows();
   const capture = createComposeCapture();
+  const tracker = createSessionTracker();
+  const permissionMode = createPermissionModeTracker();
+  const readMode = createModeReader(options);
+  const view = createRoutedView();
+  const askPerson = createPersonApproval();
   let router: Router | undefined;
+  let trigger: AutoTrigger | undefined;
+
+  // The router and the compaction and permission deps share one host, the first one
+  // a hook built, as the router always has. They take a port, never `$`.
+  const routerFor = (host: RouterHost): Router => (router ??= createRouter(host, capture, tracker, view));
+  const compactDeps = (host: RouterHost): CompactDeps => ({
+    router: routerFor(host),
+    tracker,
+    selectedModel: () => host.session.model(),
+    view,
+    messages: () => host.session.messages({}),
+  });
+  const triggerDeps = (host: RouterHost): TriggerDeps => ({
+    tracker,
+    view,
+    describe: (model) => routerFor(host).describe(model),
+    complete: (model, request, signal) => routerFor(host).complete(model, request, signal),
+    messages: () => host.session.messages({}),
+    after: (ms, fn) => host.clock.after(ms, fn),
+    log: (text) => host.ui.log(text),
+    debug: (text) => host.ui.log(text, { to: "debug" }),
+  });
+  const toolCheckDeps = (host: RouterHost): ToolCheckDeps => ({
+    tracker,
+    mode: permissionMode,
+    readMode: (): Promise<PermissionMode> => readMode(host),
+    host,
+    askPerson,
+  });
 
   on("command.run", ($, e, next) => {
     if (e.command !== "login" && e.command !== "logout") return next(e);
@@ -166,11 +217,43 @@ export const register: Register = (on) => {
   });
 
   on("turn.step", async function* ($, e, next) {
-    router ??= createRouter(hostPort($), capture);
-    return yield* routeStep(router, e, next);
+    return yield* routeStep(routerFor(hostPort($)), e, next);
   }).catch(async function* ($, e, next) {
-    router ??= createRouter(hostPort($), capture);
-    return yield* routeStepFailed(router, e, next);
+    return yield* routeStepFailed(routerFor(hostPort($)), e, next);
+  });
+
+  // A routed model summarizes a compaction; a Claude model's passes to core.
+  on("session.compact", ($, e, next) => compactSession(compactDeps(hostPort($)), e, next)).catch(($, e) =>
+    compactFailure(compactDeps(hostPort($)), e),
+  );
+
+  // After a main-loop turn, the mod's own threshold summarizes a routed session in place, for the provider.
+  on("turn.complete", async ($, e, next) => {
+    if (e.agentId === undefined) {
+      const host = hostPort($);
+      trigger ??= createAutoTrigger(triggerDeps(host));
+      await trigger.onTurnComplete();
+    }
+    return next(e);
+  });
+
+  // A routed call in auto mode is decided by the routed permission policy, or put to the person, unless Claude Code's own check settled it.
+  on("tool.check", ($, e, next) => checkRoutedTool(toolCheckDeps(hostPort($)), e, next)).catch((_, e) =>
+    checkFailed({ tracker, mode: permissionMode }, e),
+  );
+
+  // Records the latest permission mode, which the routed check reads for auto mode.
+  on("classic.UserPromptSubmit", (_, e, next) => {
+    permissionMode.observe(e);
+    return next(e);
+  });
+  on("classic.PermissionRequest", (_, e, next) => {
+    permissionMode.observe(e);
+    return next(e);
+  });
+  on("classic.PostToolUse", (_, e, next) => {
+    permissionMode.observe(e);
+    return next(e);
   });
 
   on("ui.render", { component: "Pane", requestId: PANE_ID }, ($, e, next) => {

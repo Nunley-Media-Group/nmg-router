@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-26
+
+### Changed
+
+- Keep routed sessions working with routed compaction, subagents and auto-mode permissions (#4)
+
+## [0.7.0] - 2026-10-26
+
+### Changed
+
+- Keep routed sessions working with routed compaction, subagents and auto-mode permissions (#4)
+
 ## [0.6.0] - 2026-10-26
 
 ### Changed

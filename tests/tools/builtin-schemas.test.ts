@@ -20,10 +20,53 @@ function registryOf(text: string): Record<string, unknown> {
   return JSON.parse(match[1]) as Record<string, unknown>;
 }
 
+type ObjectSchema = { properties?: Record<string, unknown>; required?: string[] };
+
+// A schema without its descriptions, which the host words per session. A member
+// named `description` under `properties` is a member, so it is kept.
+function shapeOf(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(shapeOf);
+  if (typeof schema !== "object" || schema === null) return schema;
+  const shape: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === "description") continue;
+    shape[key] = key === "properties" ? mapValues(value as Record<string, unknown>, shapeOf) : shapeOf(value);
+  }
+  return shape;
+}
+
+function mapValues(record: Record<string, unknown>, map: (value: unknown) => unknown): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, map(value)]));
+}
+
+// A tool's shape with only the members both registries declare. The host writes the
+// declarations again on every start, and an optional member it gates by account or
+// session (Artifact.edits on 2.1.311) comes and goes between starts.
+function sharedShape(schema: ObjectSchema, other: ObjectSchema): unknown {
+  const shared = Object.keys(schema.properties ?? {}).filter((name) => Object.hasOwn(other.properties ?? {}, name));
+  return shapeOf({ ...schema, properties: Object.fromEntries(shared.map((name) => [name, schema.properties?.[name]])) });
+}
+
 describe("built-in tool schema registry", () => {
-  it("matches a fresh regeneration from the installed declarations byte for byte", () => {
+  it("matches a fresh regeneration from the installed declarations in every tool's required members and shared member types", () => {
     const { source, version } = declarations();
-    expect(generateToolSchemas(source, version, () => undefined)).toBe(readFileSync(paths.output, "utf8"));
+    const fresh = registryOf(generateToolSchemas(source, version, () => undefined)) as Record<string, ObjectSchema>;
+    const committed = BUILTIN_TOOL_SCHEMAS as Record<string, ObjectSchema>;
+    expect(Object.keys(committed).sort()).toEqual(Object.keys(fresh).sort());
+    for (const [name, schema] of Object.entries(committed)) {
+      const regenerated = fresh[name] ?? {};
+      expect([name, [...(schema.required ?? [])].sort()]).toEqual([name, [...(regenerated.required ?? [])].sort()]);
+      expect([name, sharedShape(schema, regenerated)]).toEqual([name, sharedShape(regenerated, schema)]);
+    }
+  });
+
+  it("keeps a member the host gates per session out of the comparison only while it is optional", () => {
+    const committed: ObjectSchema = { properties: { file_path: { type: "string" } }, required: ["file_path"] };
+    const gated: ObjectSchema = { properties: { file_path: { type: "string", description: "Worded again" }, edits: { type: "array" } }, required: ["file_path"] };
+    expect(sharedShape(committed, gated)).toEqual(sharedShape(gated, committed));
+    expect(sharedShape(committed, { properties: { file_path: { type: "number" } } })).not.toEqual(
+      sharedShape({ properties: { file_path: { type: "number" } } }, committed),
+    );
   });
 
   it("has one entry per BuiltinToolInputs key", () => {

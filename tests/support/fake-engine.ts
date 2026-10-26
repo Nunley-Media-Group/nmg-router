@@ -8,6 +8,7 @@ import type {
   ProcessSpawnRequest,
   ProcessSpawnResult,
   PromptComposeResult,
+  SessionCompactArgs,
   ToolInfo,
 } from "claude-code";
 import type { ApiMessageInput } from "../../src/translate/messages.ts";
@@ -28,7 +29,24 @@ export type FakeOptions = {
   readonly columns?: number;
   // The child a `process.spawn` call runs. Undefined means curl is absent.
   readonly spawn?: (request: ProcessSpawnRequest) => ScriptedChild | undefined;
-  readonly session?: { readonly id?: string; readonly messages?: ApiMessageInput[] | "deny" };
+  // `agents` holds each subagent's transcript, read by `messages({ agentId })`.
+  readonly session?: { readonly id?: string; readonly messages?: ApiMessageInput[] | "deny"; readonly agents?: Record<string, ApiMessageInput[]> };
+  // The model the session has selected, and its working directory.
+  readonly selectedModel?: string;
+  readonly cwd?: string;
+  // What `$.session.authorize()` answers: a handle, or null for no first-party login.
+  readonly authorize?: { readonly handle: string; readonly kind: "bearer" | "api-key" } | null;
+  // What `$.model.classify` answers: a label, undefined for no label, or an Error it rejects with.
+  readonly classify?: string | undefined | Error;
+  // The rows `$.config.list()` answers, as the menu would draw them.
+  readonly config?: readonly { readonly key: string; readonly value: unknown }[];
+  // What `$.session.compact()` answers. Undefined means `{ messages: [] }`. As on
+  // 2.1.310, the call skips the calling plugin's own `session.compact` hook and
+  // runs core's summarizer, which `recorded.coreSummaries` counts.
+  readonly compact?: unknown;
+  // What `$.ui.ask` answers: a label, an Error it rejects with (a dismissed
+  // dialog, or nobody to ask), or a function of the question giving either.
+  readonly ask?: string | Error | ((question: string) => string | Error | Promise<string | Error>);
   readonly compose?: PromptComposeResult;
   readonly tools?: readonly ToolInfo[];
   // The plugin's directory. Its manifest is read from `files`.
@@ -85,6 +103,15 @@ export type Recorded = {
   readonly commands: CommandRunArgs[];
   // Every process run and file write, in the order the code made them.
   readonly events: string[];
+  // Each `$.session.compact` call's arguments, the `$.model.classify` calls and their
+  // text and labels, the delays `$.clock.after` was given, and each `$.session.authorize` call.
+  readonly compacts: (SessionCompactArgs | undefined)[];
+  readonly classifications: { readonly text: string; readonly labels: readonly string[] }[];
+  readonly timers: number[];
+  authorizes: number;
+  coreSummaries: number;
+  // Each `$.ui.ask` call's question and options, in the order asked.
+  readonly asks: { readonly question: string; readonly options: unknown }[];
 };
 
 export type FakeEngine = Pick<
@@ -92,6 +119,9 @@ export type FakeEngine = Pick<
   "command" | "env" | "fs" | "http" | "process" | "session" | "settings" | "store" | "telemetry" | "ui"
 > & {
   readonly recorded: Recorded;
+  readonly model: { classify(text: string, labels: readonly string[]): Promise<string | undefined> };
+  readonly config: { list(): Promise<readonly { readonly key: string; readonly value: unknown }[]> };
+  readonly clock: { after(ms: number, fn: () => void): { cancel(): void } };
   // Runs a hook as the engine runs one for the person's command: a pane opened
   // before it settles is asked, and is placed at any width.
   asking<T>(run: () => T | Promise<T>): Promise<T>;
@@ -138,6 +168,12 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     debug: [],
     commands: [],
     events: [],
+    compacts: [],
+    classifications: [],
+    timers: [],
+    authorizes: 0,
+    coreSummaries: 0,
+    asks: [],
   };
   const env: Record<string, string | undefined> = { ...defaultEnv(options.platform), ...options.env };
   const files = new Map<string, string>(Object.entries(options.files ?? {}));
@@ -277,7 +313,36 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     },
     session: {
       id: async () => options.session?.id ?? "session-test",
-      messages: async () => options.session?.messages ?? [],
+      messages: async (args?: { agentId?: string }) =>
+        args?.agentId === undefined ? (options.session?.messages ?? []) : (options.session?.agents?.[args.agentId] ?? []),
+      model: async () => options.selectedModel ?? "claude-sonnet-5-5",
+      cwd: async () => options.cwd ?? "/work/project",
+      // Counted, and answered as the host does: the handle, or null with no login.
+      authorize: async () => {
+        recorded.authorizes += 1;
+        return options.authorize ?? null;
+      },
+      compact: async (input?: SessionCompactArgs) => {
+        recorded.compacts.push(input);
+        recorded.coreSummaries += 1;
+        return options.compact ?? { messages: [] };
+      },
+    },
+    model: {
+      classify: async (text: string, labels: readonly string[]) => {
+        recorded.classifications.push({ text, labels: [...labels] });
+        if (options.classify instanceof Error) throw options.classify;
+        return options.classify;
+      },
+    },
+    config: { list: async () => [...(options.config ?? [])] },
+    // A timer runs its callback on the next macrotask, which the tests wait for.
+    clock: {
+      after: (ms: number, fn: () => void) => {
+        recorded.timers.push(ms);
+        const timer = setTimeout(fn, 0);
+        return { cancel: () => clearTimeout(timer) };
+      },
     },
     plugin: { name: "nmg-router", root: options.pluginRoot ?? "/plugin" },
     prompt: {
@@ -324,6 +389,13 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
         return {};
       },
       invalidate: () => undefined,
+      ask: async (question: string, askOptions?: unknown) => {
+        recorded.asks.push({ question, options: askOptions });
+        const answer = typeof options.ask === "function" ? await options.ask(question) : options.ask;
+        if (answer === undefined) throw new Error("fake engine: nobody to ask");
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
     },
     telemetry: {
       log: async (entry: unknown) => {
