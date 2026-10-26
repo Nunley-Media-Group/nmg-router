@@ -34,15 +34,20 @@ export function searchLoadedTools(messages: readonly ApiMessageInput[]): string[
   return names;
 }
 
+// The sentence that opens the host's handback reminder, as 2.1.311 words it.
+const HANDBACK_REMINDER = `Your final report is delivered through ${SUBAGENT_HANDBACK}`;
+
 // Whether the host has given this loop SubagentHandback. The host never lists the
 // tool to a mod, but where it runs one (a subagent in auto mode on 2.1.311) it tells
-// the subagent so in a reminder of its own: a top-level user text block naming the
-// tool. Outside auto mode the host has no such tool, and a call to it fails.
+// the subagent so in a reminder of its own: a top-level user text block holding the
+// reminder sentence. Other user text can name the tool, such as gitStatus commit
+// subjects or a delegation prompt, so only the sentence counts. Outside auto mode the
+// host has no such tool, and a call to it fails.
 export function hostOffersHandback(messages: readonly ApiMessageInput[]): boolean {
   return messages.some(
     (message) =>
       message.role === "user" &&
-      message.content.some((block) => block.type === "text" && typeof block.text === "string" && block.text.includes(SUBAGENT_HANDBACK)),
+      message.content.some((block) => block.type === "text" && typeof block.text === "string" && block.text.includes(HANDBACK_REMINDER)),
   );
 }
 

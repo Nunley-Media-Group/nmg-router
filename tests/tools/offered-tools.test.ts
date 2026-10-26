@@ -91,6 +91,19 @@ describe("offered tool names", () => {
     expect(hostOffersHandback([REMINDER])).toBe(true);
   });
 
+  it("does not take user context that names the tool for the host's reminder", () => {
+    const context: ApiMessageInput = {
+      role: "user",
+      content: [
+        { type: "text", text: "Recent commits:\n29c2963 fix: leave routed SubagentHandback to the auto-mode classifier (#4)" },
+        { type: "text", text: "Ask the helper to finish with SubagentHandback." },
+      ],
+    };
+    expect(hostOffersHandback([context])).toBe(false);
+    expect(offeredToolNames(["Read"], [context], "agent-1")).toEqual(["Read"]);
+    expect(offeredToolNames(["Read"], [context, REMINDER], "agent-1")).toEqual(["Read", SUBAGENT_HANDBACK]);
+  });
+
   it("reads tool_reference blocks only from ToolSearch results", () => {
     const other: ApiMessageInput[] = [
       { role: "assistant", content: [{ type: "tool_use", id: "read_1", name: "Read", input: {} }] },
