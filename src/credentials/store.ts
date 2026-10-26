@@ -1,4 +1,4 @@
-import type { EngineInterface } from "claude-code";
+import type { HostPort } from "../host.ts";
 import { isAnthropicProvider } from "../gateway/anthropic.ts";
 import { CredentialError, NoKeyringError } from "../errors/errors.ts";
 import { createLinuxKeyring } from "./keyring-linux.ts";
@@ -7,7 +7,7 @@ import { createWindowsKeyring } from "./keyring-windows.ts";
 import { detectPlatform, type CredentialBackend, type Platform } from "./platform.ts";
 import { createVault } from "./vault.ts";
 
-export type CredentialStoreDeps = Pick<EngineInterface, "env" | "fs" | "process" | "store">;
+export type CredentialStoreDeps = Pick<HostPort, "env" | "fs" | "process" | "store">;
 
 export type StoredCredential = { readonly provider: string; readonly account: string };
 

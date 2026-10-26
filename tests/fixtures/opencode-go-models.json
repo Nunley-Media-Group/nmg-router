@@ -1,0 +1,10 @@
+{
+  "object": "list",
+  "data": [
+    { "id": "glm-5.1", "object": "model" },
+    { "id": "kimi-k3", "object": "model" },
+    { "id": "gpt-5.5", "object": "model" },
+    { "id": "minimax-m2.5", "object": "model" },
+    { "id": "claude-haiku-5-5", "object": "model" }
+  ]
+}

@@ -1,4 +1,4 @@
-import type { EngineInterface } from "claude-code";
+import type { HostPort } from "../host.ts";
 import { NoKeyringError } from "../errors/errors.ts";
 import {
   KEYRING_SERVICE,
@@ -15,7 +15,7 @@ const LOCKED_TEXT = /locked|dismissed/i;
 // The Secret Service is not on the bus, or D-Bus could not start it.
 const NO_SECRET_SERVICE_TEXT = /org\.freedesktop\.secrets[^\n]*(not provided|ServiceUnknown)|autolaunch/i;
 
-export type LinuxKeyringDeps = Pick<EngineInterface, "env" | "process">;
+export type LinuxKeyringDeps = Pick<HostPort, "env" | "process">;
 
 export function createLinuxKeyring(deps: LinuxKeyringDeps): CredentialBackend {
   // Runs secret-tool. With no session bus there is no Secret Service to reach,

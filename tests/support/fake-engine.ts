@@ -14,7 +14,27 @@ export type FakeOptions = {
   readonly files?: Record<string, string>;
   // Return a result to override a command, or undefined to use the default.
   readonly run?: (argv: readonly string[]) => ProcessRunResult | undefined;
+  // Answers a request by URL and method. Returning undefined means no route,
+  // and the request fails as an unreachable host would.
+  readonly http?: FakeHttpResponder;
 };
+
+export type FakeHttpRequest = {
+  readonly url: string;
+  readonly method: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: string | undefined;
+};
+
+export type FakeHttpReply = {
+  readonly status: number;
+  readonly body?: unknown;
+  readonly text?: string;
+};
+
+export type FakeHttpResponder = (request: FakeHttpRequest) => FakeHttpReply | undefined;
+
+export type FakePaneOpen = { readonly id: string; readonly title?: string; readonly focus?: boolean };
 
 export type RecordedProcess = {
   readonly argv: string[];
@@ -23,12 +43,14 @@ export type RecordedProcess = {
 };
 
 export type Recorded = {
-  readonly http: { url: string }[];
+  readonly http: FakeHttpRequest[];
   readonly processes: RecordedProcess[];
   readonly fsWrites: { path: string; text: string }[];
   readonly storeWrites: { key: string; value: unknown }[];
   readonly settingsWrites: unknown[];
   readonly ui: string[];
+  readonly panes: FakePaneOpen[];
+  readonly paneCloses: string[];
   readonly telemetry: string[];
   // Every process run and file write, in the order the code made them.
   readonly events: string[];
@@ -153,6 +175,8 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     storeWrites: [],
     settingsWrites: [],
     ui: [],
+    panes: [],
+    paneCloses: [],
     telemetry: [],
     events: [],
   };
@@ -203,9 +227,18 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       },
     },
     http: {
-      fetch: async (url: string) => {
-        recorded.http.push({ url });
-        throw new Error("fake engine: no network");
+      fetch: async (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => {
+        const request: FakeHttpRequest = {
+          url,
+          method: init?.method ?? "GET",
+          headers: { ...init?.headers },
+          body: init?.body,
+        };
+        recorded.http.push(request);
+        const reply = options.http?.(request);
+        if (reply === undefined) throw new Error("fake engine: no network");
+        const text = reply.text ?? (reply.body === undefined ? "" : JSON.stringify(reply.body));
+        return { status: reply.status, ok: reply.status >= 200 && reply.status < 300, headers: {}, text };
       },
     },
     store: {
@@ -231,6 +264,14 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       toast: (text: string) => {
         recorded.ui.push(text);
       },
+      open: async (pane: FakePaneOpen) => {
+        recorded.panes.push(pane);
+        return { isPlaced: true };
+      },
+      close: async (pane: { id: string }) => {
+        recorded.paneCloses.push(pane.id);
+      },
+      invalidate: () => undefined,
     },
     telemetry: {
       log: async (entry: unknown) => {

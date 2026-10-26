@@ -1,8 +1,8 @@
-import type { EngineInterface } from "claude-code";
+import type { HostPort } from "../host.ts";
 import { CredentialError } from "../errors/errors.ts";
 import { accountKey, fromBase64, toBase64, type CredentialBackend } from "./platform.ts";
 
-export type VaultDeps = Pick<EngineInterface, "env" | "fs" | "process">;
+export type VaultDeps = Pick<HostPort, "env" | "fs" | "process">;
 
 const VAULT_VERSION = 1;
 const KEY_BYTES = 32;

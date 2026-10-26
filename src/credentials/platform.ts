@@ -1,10 +1,11 @@
-import type { EngineInterface, ProcessRunResult } from "claude-code";
+import type { ProcessRunResult } from "claude-code";
 import { CredentialError, NoKeyringError } from "../errors/errors.ts";
+import type { HostPort } from "../host.ts";
 
 export type Platform = "macos" | "windows" | "linux" | "other";
 
-export type ProcessDeps = Pick<EngineInterface, "process">;
-export type PlatformDeps = Pick<EngineInterface, "env" | "process">;
+export type ProcessDeps = Pick<HostPort, "process">;
+export type PlatformDeps = Pick<HostPort, "env" | "process">;
 
 // One backend per storage location. Each call receives the provider and the
 // account separately; the secret is only ever handed over on stdin.
