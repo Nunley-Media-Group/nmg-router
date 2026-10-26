@@ -145,6 +145,41 @@ describe("command.run under the host's hook budget", () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  it("keeps a second /login's pane open when it supersedes a pending flow", async () => {
+    const { hooks } = registered();
+    const engine = fakeEngine({ platform: "macos", columns: NARROW });
+
+    await runCommand(hooks, engine, inputOf("login"), vi.fn());
+    await vi.waitFor(() => expect(find(drawPane(hooks), "pick")).toBeDefined());
+    await runCommand(hooks, engine, inputOf("login"), vi.fn());
+
+    // The first flow ends cancelled, and its end leaves the second command's pane alone.
+    await vi.waitFor(() => expect(engine.recorded.ui).toEqual(["Login cancelled."]));
+    expect(engine.recorded.paneCloses).toEqual([]);
+    (find(drawPane(hooks), "pick").props.onSelect as (value: string) => void)("opencode-go");
+    await vi.waitFor(() => expect(find(drawPane(hooks), "secret")).toBeDefined());
+    expect(engine.recorded.ui).toEqual(["Login cancelled."]);
+    expect(engine.keyboard()).toBe(PANE_ID);
+  });
+
+  it("gives the OpenAI Codex paste field the keyboard, even after the pane lost it", async () => {
+    const { hooks } = registered();
+    const engine = fakeEngine({ platform: "macos", columns: NARROW });
+
+    await runCommand(hooks, engine, inputOf("login"), vi.fn());
+    await vi.waitFor(() => expect(find(drawPane(hooks), "pick")).toBeDefined());
+    (find(drawPane(hooks), "pick").props.onSelect as (value: string) => void)("openai-codex");
+    // The host hands the keys back to the prompt while the flow prepares the sign-in.
+    engine.dropKeys();
+
+    await vi.waitFor(() => expect(engine.recorded.focus.at(-1)).toBe("paste"));
+    expect(engine.keyboard()).toBe(PANE_ID);
+    expect(find(drawPane(hooks), "paste")).toBeDefined();
+    // The sign-in page is still opened in the browser.
+    expect(engine.recorded.processes.some((process) => process.argv[0] === "open")).toBe(true);
+    expect(engine.recorded.paneCloses).toEqual([]);
+  });
+
   it("passes a plugin's run of /login on to the picker when no Anthropic pick is pending", async () => {
     const { hooks } = registered();
     const engine = fakeEngine({ platform: "macos", columns: NARROW });

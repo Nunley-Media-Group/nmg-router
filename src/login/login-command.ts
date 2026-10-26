@@ -90,14 +90,17 @@ async function oauthFlow(host: Host, plugin: ProviderPlugin, services: Services)
 
   const begun: OAuthBegin = await beginOAuth(login.config);
   host.ui.log(`Sign in to ${identity.name}: ${begun.url}`);
-  await openBrowser(host, await services.platform(), begun.url);
 
-  const picked = await services.pane.open(host, {
+  // The paste step is drawn and focused before the browser opens, so the pane
+  // holds the keyboard when the person comes back from signing in.
+  const answer = services.pane.open(host, {
     kind: "text",
     title: `Log in to ${identity.name}`,
     label: "Redirect URL or code",
     lines: ["Open this URL, sign in, then paste the redirect URL (or code):", begun.url],
   });
+  await openBrowser(host, await services.platform(), begun.url);
+  const picked = await answer;
   if (picked.kind !== "submitted") return { text: "Login cancelled." };
 
   try {

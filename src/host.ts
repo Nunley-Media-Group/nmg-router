@@ -1,4 +1,13 @@
-import type { HttpResponse, PaneCloseArgs, PaneOpenArgs, ProcessRunInit, ProcessRunResult, UiOpenResult } from "claude-code";
+import type {
+  HttpResponse,
+  PaneCloseArgs,
+  PaneOpenArgs,
+  ProcessRunInit,
+  ProcessRunResult,
+  UiFocusArgs,
+  UiFocusResult,
+  UiOpenResult,
+} from "claude-code";
 
 // The host calls the mod makes, as plain functions. The hooks module builds one
 // port per command, and each function calls the host at its call site, so the
@@ -29,6 +38,7 @@ export type HostPort = {
     log(text: string): void;
     open(args: PaneOpenArgs): Promise<UiOpenResult>;
     close(args: PaneCloseArgs): Promise<void>;
+    focus(args: UiFocusArgs): Promise<UiFocusResult>;
     invalidate(event: "ui.render"): void;
   };
 };

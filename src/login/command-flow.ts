@@ -11,7 +11,8 @@ import type { PaneController } from "./pane.ts";
 //
 // The pane is opened before the hook answers: a `$` call pauses the budget, and
 // an open behind the person's command is placed at any width (pane.ts). The flow
-// draws its steps in that held pane, and it closes when the flow ends or hands off.
+// draws its steps in that held pane, and it closes when the flow ends or hands off,
+// unless a later command has taken the pane over.
 
 export type FlowHost = Pick<HostPort, "ui"> & {
   readonly command: {
@@ -47,12 +48,13 @@ export function createCommandFlows(): CommandFlows {
       if (!opened.isPlaced) {
         return { text: `The /${input.command} pane could not be shown: ${opened.reason}. Nothing was changed.` };
       }
+      const { hold } = opened;
 
       let handedOff = false;
       const next: Next = async (received) => {
         handedOff = true;
         // The built-in command draws its own dialog, so the mod's pane goes first.
-        await pane.end();
+        await pane.end(hold);
         handoffs.add(received.command);
         try {
           // The built-in command prints its own lines, so its result is not logged again.
@@ -62,7 +64,8 @@ export function createCommandFlows(): CommandFlows {
         }
       };
       flow(next)
-        .finally(() => pane.end())
+        // Only this flow's hold: a later command's begin has replaced it if it ran.
+        .finally(() => pane.end(hold))
         .then(
           (result) => {
             if (!handedOff && result.text !== undefined) host.ui.log(result.text);

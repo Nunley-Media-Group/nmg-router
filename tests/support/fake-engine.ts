@@ -53,6 +53,8 @@ export type Recorded = {
   readonly ui: string[];
   readonly panes: FakePaneOpen[];
   readonly paneCloses: string[];
+  // Each element key the mod moved a pane's focus ring onto.
+  readonly focus: string[];
   readonly telemetry: string[];
   readonly commands: CommandRunArgs[];
   // Every process run and file write, in the order the code made them.
@@ -67,6 +69,11 @@ export type FakeEngine = Pick<
   // Runs a hook as the engine runs one for the person's command: a pane opened
   // before it settles is asked, and is placed at any width.
   asking<T>(run: () => T | Promise<T>): Promise<T>;
+  // The pane id holding the keyboard, or undefined while the prompt has it.
+  keyboard(): string | undefined;
+  // Hands the keyboard back to the prompt, as the host does when a pane holds
+  // nothing focusable or the person clicks the prompt.
+  dropKeys(): void;
 };
 
 const HOME: Record<FakePlatform, string> = {
@@ -185,6 +192,7 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     ui: [],
     panes: [],
     paneCloses: [],
+    focus: [],
     telemetry: [],
     commands: [],
     events: [],
@@ -197,6 +205,8 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
   const columns = options.columns ?? 200;
   let askingDepth = 0;
   const askedPanes = new Set<string>();
+  let keysWith: string | undefined;
+  const placedPanes = new Set<string>();
 
   function uname(): ProcessRunResult {
     const name = { macos: "Darwin", linux: "Linux", windows: "Windows_NT", other: "FreeBSD" }[options.platform];
@@ -222,6 +232,10 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       } finally {
         askingDepth -= 1;
       }
+    },
+    keyboard: () => keysWith,
+    dropKeys: () => {
+      keysWith = undefined;
     },
     command: {
       run: async (input: CommandRunArgs) => {
@@ -292,15 +306,29 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       },
       // The host's rule: an open answering the person is placed at any width; one
       // the plugin makes on its own waits below 144 columns, 110 once asked for.
+      // Opening a pane that is already placed only retitles it.
       open: async (pane: FakePaneOpen) => {
         recorded.panes.push(pane);
         if (askingDepth > 0) askedPanes.add(pane.id);
         const floor = askedPanes.has(pane.id) ? 110 : 144;
-        if (askingDepth > 0 || columns >= floor) return { isPlaced: true };
+        if (askingDepth > 0 || columns >= floor || placedPanes.has(pane.id)) {
+          placedPanes.add(pane.id);
+          // `focus` is granted here: the fake prompt is always idle and empty.
+          if (pane.focus === true) keysWith = pane.id;
+          return { isPlaced: true };
+        }
         return { isPlaced: false, reason: `unasked below ${floor} columns (${columns} now)` };
       },
       close: async (pane: { id: string }) => {
         recorded.paneCloses.push(pane.id);
+        placedPanes.delete(pane.id);
+        if (keysWith === pane.id) keysWith = undefined;
+      },
+      // As the host: only a site holding the keyboard moves its ring.
+      focus: async (args: { requestId: string; key: string }) => {
+        if (keysWith !== args.requestId) return { deny: "the site holds no keyboard" };
+        recorded.focus.push(args.key);
+        return {};
       },
       invalidate: () => undefined,
     },

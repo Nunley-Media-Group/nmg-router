@@ -101,6 +101,7 @@ export const register: Register = (on) => {
         log: (text) => $.ui.log(text),
         open: (args) => $.ui.open(args),
         close: (args) => $.ui.close(args),
+        focus: (args) => $.ui.focus(args),
         invalidate: (event) => $.ui.invalidate(event),
       },
     };

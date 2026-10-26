@@ -16,7 +16,7 @@ export function scriptedPane(answers: readonly ScriptedAnswer[]): ScriptedPane {
   const views: PaneView[] = [];
   return {
     views,
-    begin: async () => ({ isPlaced: true }),
+    begin: async (host) => ({ isPlaced: true, hold: { host, closed: false } }),
     end: async () => undefined,
     async open(_host, view) {
       views.push(view);

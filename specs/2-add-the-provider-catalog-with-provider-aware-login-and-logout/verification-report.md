@@ -3,8 +3,8 @@
 **Date**: 2026-10-25
 **Issue**: #2
 **Reviewer**: Claude Code (nmg-sdlc verify worker)
-**Scope**: Implementation verification against spec (re-verification after fix 8743ca1)
-**Verification head**: 8743ca1c3497703c2a3803634ee9b5df9d64683b
+**Scope**: Implementation verification against spec (re-verification after fix 84f288e)
+**Verification head**: 84f288eb96d67e152792301877a4292385946638
 
 ---
 
@@ -12,20 +12,25 @@
 
 | Category | Score (1-5) |
 |----------|-------------|
-| Spec Compliance | 2 |
+| Spec Compliance | 3 |
 | Architecture (SOLID) | 4 |
-| Security | 4 |
+| Security | 3 |
 | Performance | 4 |
 | Testability | 3 |
 | Error Handling | 3 |
 | **Overall** | 3.3 |
 
 ### Implementation Status: Fail
-**Total Issues**: 3 (1 critical, 1 medium, 1 low)
+**Total Issues**: 5 (1 critical, 1 high, 1 medium, 2 low)
 
-All three registered validations pass, and so do the 229 unit tests. Fix 8743ca1 fixes the earlier critical defect C1. The `command.run` hook now answers at once, the host no longer skips it, and Claude Code's built-in `/login` or `/logout` no longer runs in its place.
+All three registered validations pass, and so do the 235 unit tests. Fix 84f288e fixes C2. Live at 91 columns, `/login` and `/logout` now draw their picker. Fuzzy search, the masked key field, invalid-key refusal, the Anthropic hand-off and logout cancel all work.
 
-The fix causes a new critical defect, C2. The flow now opens the login pane after the hook has returned. The host therefore counts the pane as **unasked**, and an unasked pane is only drawn on terminals at least 144 columns wide (110 once the person has opened that pane before). In the live session the terminal was 91 columns wide. `/login` and `/logout` printed `The login pane waits for a wider terminal: unasked below 144 columns (91 now)` and drew no picker. The person cannot choose a provider, so AC5–AC8 fail live.
+Two new defects block the flows live:
+
+- **C3 (critical)**: in the OpenAI Codex OAuth step, the pane's "Redirect URL or code" field never gets keyboard focus. Typing and pasting go to Claude's chat prompt. A pasted redirect URL, which carries the authorization code, is sent to the model as a chat message. AC7 cannot be completed, and the code leaks into the transcript.
+- **H1 (high)**: a `/login` or `/logout` run while an earlier flow is still pending loses its pane. The old flow's cleanup closes the new pane, so the next step reopens it unasked and it is not placed (`The login pane could not be shown: unasked below 110 columns (91 now…)` then `Login cancelled.`).
+
+The keychain in this session was locked (`security` exit 36), so no credential could be saved live. AC6's success path and AC8's account steps have no interactive evidence and need the user's unlocked keychain.
 
 ---
 
@@ -49,15 +54,15 @@ The fix causes a new critical defect, C2. The flow now opens the login pane afte
 
 ## Deterministic Steering Artifact and Ceiling
 
-`sdlc-verify-steering.mjs` ran at the verification head on a clean tree. `.nmg-sdlc/verification/2.json` reports `ceiling: null` and coverage `declared: 3, recorded: 3, complete: true`.
+`sdlc-verify-steering.mjs` ran at the verification head on a clean tree (run id `d71ecb44-1ddc-487b-917e-e1fc843ed3ca`). `.nmg-sdlc/verification/2.json` reports `ceiling: null` and coverage `declared: 3, recorded: 3, complete: true`.
 
 | Validation | Provider | Required | Result |
 |------------|----------|----------|--------|
 | repository.typecheck | builtin.command (`npm run typecheck`) | yes | passed |
-| repository.tests | builtin.command (`npm test`) | yes | passed (26 files, 229 tests) |
+| repository.tests | builtin.command (`npm test`) | yes | passed (26 files, 235 tests) |
 | repository.plugin-manifest | builtin.command (`claude plugin validate .`) | yes | passed |
 
-No smoke validation is declared in the steering manifest. The interactive verification required by `project.verification` fails (see below), so the status is capped at Fail.
+The steering manifest declares no smoke validation. The interactive verification that `project.verification` requires fails (see below), so the status is capped at Fail.
 
 ---
 
@@ -65,14 +70,14 @@ No smoke validation is declared in the steering manifest. The interactive verifi
 
 | AC | Description | Status | Evidence |
 |----|-------------|--------|----------|
-| AC1 | Built-in providers | Pass (unit) | `src/providers/builtin/index.ts`; `tests/providers/builtin.test.ts`. The live picker was not drawn, so the provider rows could not be seen in this run |
+| AC1 | Built-in providers | Pass | `src/providers/builtin/index.ts`; `tests/providers/builtin.test.ts`. Live: searching the picker found `OpenCode Go`, `ClinePass` and `OpenAI Codex`. xAI was hidden by `disabledProviders` |
 | AC2 | Model discovery | Pass (unit only) | `src/catalog/catalog.ts`, `src/providers/builtin/opencode-go.ts`; `tests/catalog/discovery.test.ts` |
 | AC3 | Cache, refresh and failure states | Pass (unit only) | `src/catalog/catalog.ts`; `tests/catalog/catalog.test.ts` |
-| AC4 | Custom providers and filters | Pass | `src/config/user-config.ts`; `tests/config/user-config.test.ts`. Live: `Config entry providers.leaky.apiKey looks like a credential and was ignored. Use /login to sign in to leaky.` The sentinel value was not echoed |
-| AC5 | Login picker and Anthropic | **Fail** | Live at 91 columns, `/login` drew no picker, only `The login pane waits for a wider terminal: unasked below 144 columns (91 now)`. The person cannot reach the Anthropic row or any routed provider. The hook no longer falls through to the built-in login, which is the C1 fix (`tests/hooks/command-flow.test.ts`) |
-| AC6 | API-key login | **Fail** | It is unreachable live because the picker is not drawn. The mock provider received no request (empty request log). Unit tests pass (`tests/login/login-command.test.ts`) |
-| AC7 | OAuth login and refresh | **Fail** | It is unreachable live for the same reason. The paste flow, state check and refresh pass in unit tests (`tests/login/oauth-code-login.test.ts`). A real Codex sign-in needs the user |
-| AC8 | Accounts and logout | **Fail** | Live, `/logout` also printed `The login pane waits for a wider terminal…`, and its open cancelled the pending `/login` flow (`Login cancelled.`). It did not run the built-in logout, and the Claude session stayed signed in. The account picker cannot be reached. Unit tests pass (`tests/login/logout-command.test.ts`) |
+| AC4 | Custom providers and filters | Pass | `src/config/user-config.ts`; `tests/config/user-config.test.ts`. Live: the custom `Local Test` provider was listed, xAI was hidden, and `leaky` gave `Config entry providers.leaky.apiKey looks like a credential and was ignored. Use /login to sign in to leaky.` The sentinel value was not echoed |
+| AC5 | Login picker and Anthropic | Pass | Live at 91 columns: the picker was titled "Select provider to login", with a "Type to search" field (11 rows) and rows such as `Local Test — not logged in` and `OpenAI Codex — not logged in`. Picking Anthropic opened Claude Code's own "Select login method" dialog, which was cancelled. The session stayed signed in |
+| AC6 | API-key login | **Incomplete** | Live: the masked field drew only `•••••••••••••••••`. An invalid key gave `Invalid Local Test API key; nothing was saved.`, and the mock logged `auth=other`. A valid key was validated (mock `auth=valid`), but the save hit `The macos keyring is locked; the credential for local-test was not changed.` That is correct fail-closed behaviour, but "Logged in to …" and the refresh were not shown. Unit tests pass |
+| AC7 | OAuth login and refresh | **Fail** | Live: the pane showed the authorize URL (PKCE S256, state) and the "Redirect URL or code: Paste here" field. Text typed or pasted went to Claude's chat prompt, not the field (C3), so the paste flow cannot be completed. The state check and refresh pass only in unit tests (`tests/login/oauth-code-login.test.ts`) |
+| AC8 | Accounts and logout | **Incomplete** | Live: with no stored credential, `/logout` listed only `Anthropic (Claude Code login)`, and Esc gave `Logout cancelled.` The two-account picker, `(active)` marker and delete could not be driven because the keychain was locked. Anthropic logout was not picked, so the user was not signed out. Unit tests pass (`tests/login/logout-command.test.ts`) |
 
 ---
 
@@ -81,9 +86,9 @@ No smoke validation is declared in the steering manifest. The interactive verifi
 | Task | Description | Status | Notes |
 |------|-------------|--------|-------|
 | T001–T006 | Interfaces, HTTP, providers, auth, config, catalog | Complete | |
-| T007 | Pane controller, fuzzy filter and masked input | Complete (defect) | The pane is opened outside the asked command hook; see C2 |
-| T008 | /login and /logout commands and hook wiring | Complete (defect) | `hooks/register.ts` and `src/login/command-flow.ts` start the flow after the hook answers; see C2 |
-| T009–T013 | Fakes, fixtures and tests | Complete | The fake engine models neither the asked/unasked placement rule nor the 144-column floor, so the suite cannot catch C2 |
+| T007 | Pane controller, fuzzy filter and masked input | Complete (defects) | C3: the text step does not take focus. H1: `end()` is not tied to the `begin()` that opened the pane. L2: layout |
+| T008 | /login and /logout commands and hook wiring | Complete (defect) | `src/login/command-flow.ts`: a superseded flow's `.finally(() => pane.end())` closes the next flow's pane (H1) |
+| T009–T013 | Fakes, fixtures and tests | Complete | The fake engine models neither keyboard focus nor a second command arriving while a flow is pending |
 
 ---
 
@@ -93,40 +98,40 @@ No smoke validation is declared in the steering manifest. The interactive verifi
 
 | Principle | Score (1-5) | Notes |
 |-----------|-------------|-------|
-| Single Responsibility | 4 | `command-flow.ts` isolates the run-after-the-hook logic. `hooks/register.ts` only wires |
+| Single Responsibility | 4 | `command-flow.ts` owns the flow lifecycle, `pane.ts` the view. `hooks/register.ts` only wires |
 | Open/Closed | 5 | Adding a provider takes one module plus one registry entry |
 | Liskov Substitution | 4 | Custom and built-in plugins are interchangeable |
-| Interface Segregation | 4 | `FlowHost` and `HostPort` picks are narrow |
+| Interface Segregation | 4 | `FlowHost` and the `Pick<PaneController, "begin" \| "end">` are narrow |
 | Dependency Inversion | 4 | No direct `$` use under `src/` |
 
 ### Notes
 
-- `createCommandFlows().isHandoff` marks the Anthropic re-run so the hook passes it to `next(e)`. The host docs say `$.command.run` "runs through every hook but the calling one", so the guard may never be hit. It is harmless but unverified live.
+- The pane controller is a module-level singleton with mutable `pending` and `held` state, shared by overlapping flows. Each flow has no ownership token for the pane, and this is the root of H1.
 
 ---
 
 ## Security Assessment
 
-- [x] PKCE S256, a checked state and no listening port. Credentials stay in the keyring
-- [x] Config entries that look like credentials are refused by path without the value (confirmed live)
-- [x] The new `.catch` answers a failed `/logout` with text and never falls through to the built-in logout. Live, the Claude session stayed signed in
-- [x] The flow's error handler logs a fixed message, never the error, which might carry a provider reply
-- Low (L1, carried over): the OAuth authorize URL is also written to the transcript
+- [x] PKCE S256, a checked state and no listening port. Credentials stay in the keyring, and a locked keyring fails closed (confirmed live)
+- [x] Config entries that look like credentials are refused by path, without the value (confirmed live)
+- [x] The masked field draws only `•` (confirmed live)
+- [ ] **C3**: because the paste field has no focus, a person who pastes the redirect URL sends the OAuth authorization code to the model as a chat prompt. It is then kept in the transcript and sent to Anthropic. This breaks FR8's intent ("No credential in UI text, logs…")
+- Low (L1, carried over): the OAuth authorize URL is also written to the transcript. It holds no secret
 
 ---
 
 ## Performance Assessment
 
-- [x] `load()` makes no network call. Refresh runs per provider
-- [x] The hook answers at once, so it no longer holds the 10 s budget
+- [x] `load()` makes no network call, and refresh runs per provider
+- [x] The hook opens the pane with a `$` call and answers. The 10 s budget is no longer at risk
 
 ---
 
 ## Error Handling Assessment
 
-- C1 (the 10 s budget overrun falling through to the built-in command) is **fixed**.
-- **Critical (C2)**: `flows.start` returns `{}` and opens the pane later, outside the hook frame of the person's command. Under the host's placement rule ("Asked (the hook of a command the person typed …) a pane is placed at any width … Unasked it is placed from 144 terminal columns"), the picker stays undrawn on ordinary terminal widths. The flow promise then waits with nothing on screen. The log line tells the person to widen the terminal, but no picker appears.
-- Medium (M1, still open): a flow left waiting on an undrawn pane is only settled when a later `/login` or `/logout` replaces it (live: `Login cancelled.`). Nothing times it out or closes it.
+- C2 (the unasked pane not being drawn below 144 columns) is **fixed** for the first `/login` or `/logout` of a session.
+- M1 (an undrawn pane waiting forever) is **fixed**: an open that is not placed now logs its reason and ends the step (`Login cancelled.`).
+- **High (H1)**: `createCommandFlows().start` runs `flow(next).finally(() => pane.end())`. When a new command's `begin()` cancels the pending step of the old flow, the old flow settles and its `finally` calls `end()` *after* the new `begin()` set `held`. This clears `held` and closes the new pane. The new flow's next `open()` then calls `ui.open` outside the hook, and the host does not place it (`unasked below 110 columns (91 now, an id the person opened before)`). Live, the person had to run `/login` twice.
 
 ---
 
@@ -135,10 +140,12 @@ No smoke validation is declared in the steering manifest. The interactive verifi
 | Acceptance Criterion | Has Scenario | Has Steps | Passes |
 |---------------------|-------------|-----------|--------|
 | AC1–AC4 | Yes | Yes (Vitest) | Yes |
-| AC5–AC8 | Yes | Yes (Vitest) | Yes (unit) / No (live) |
+| AC5 | Yes | Yes (Vitest) | Yes (unit and live) |
+| AC6, AC8 | Yes | Yes (Vitest) | Yes (unit) / Incomplete (live, keychain locked) |
+| AC7 | Yes | Yes (Vitest) | Yes (unit) / No (live) |
 
-- Unit tests: 229 in 26 files, all passing. They include the new `tests/hooks/command-flow.test.ts`
-- Gap: `tests/support/fake-engine.ts` always places panes, so no test exercises the unasked, narrow-terminal case
+- Unit tests: 235 in 26 files, all passing.
+- Gaps: no test runs a second `start()` while a flow is pending and then checks the new flow's pane stays held and placed. The fake engine does not model keyboard focus.
 
 ---
 
@@ -146,19 +153,30 @@ No smoke validation is declared in the steering manifest. The interactive verifi
 
 | Field | Value |
 |-------|-------|
-| **Method** | `herdr tab create --cwd <repo> --label verify-2 --no-focus`, then `herdr agent start verify-2 --kind claude --pane <pane> -- --plugin-dir .` |
-| **Setup** | A temporary `~/Library/Application Support/nmg-router/config.json` with the custom provider `local-test` (a mock on `127.0.0.1:18471`), the credential-bearing entry `leaky` holding a sentinel string, six `auth: "none"` filler providers (11 picker rows) and `disabledProviders: ["xai"]`. The config was removed, the mock stopped and the tab closed afterwards |
+| **Method** | `herdr tab create --cwd <repo> --label verify-2 --no-focus`, then `herdr agent start verify-2 --kind claude --pane <pane> -- --plugin-dir .`. Keys were sent with `herdr agent send-keys` and `herdr pane send-text`, and the screen was read with `herdr agent read` |
+| **Setup** | A temporary `~/Library/Application Support/nmg-router/config.json` held the custom API-key provider `local-test` (a mock on `127.0.0.1:18471` that accepts only the dummy key `nmgtest-valid-key`) and the credential-bearing entry `leaky` with a sentinel value. It also held six `auth: "none"` filler providers (11 picker rows) and `disabledProviders: ["xai"]`. Afterwards the config was removed, the mock stopped and the tab closed |
 | **Startup** | Claude Code v2.1.310 at a 91-column terminal. No folder-trust dialog, and no hook or plugin load errors |
+| **Environment** | `security show-keychain-info` gives `User interaction is not allowed` (exit 36) in this session, both from the worker and from a herdr shell. The login keychain is locked, and unlocking it needs the user's password |
 
 | # | Prompt / keys | Observed outcome | Excerpt |
 |---|---------------|------------------|---------|
-| 1 | `/login` | The config problem is shown without its value. No picker is drawn, and the built-in login does not run | `nmg-router: Config entry providers.leaky.apiKey looks like a credential and was ignored. Use /login to sign in to leaky.` / `nmg-router: The login pane waits for a wider terminal: unasked below 144 columns (91 now): placed when the person opens it, or when the terminal is widened to 144 columns` |
-| 2 | `/logout` | The pending login flow is cancelled. The logout pane is not drawn either, and the built-in logout does not run. The status line still shows the Claude plan | `nmg-router: Login cancelled.` / `nmg-router: The login pane waits for a wider terminal: unasked below 144 columns (91 now)…` |
-| 3 | Mock request log | No request reached the mock provider | (empty) |
+| 1 | `/login` | The picker is drawn at 91 columns, with search because there are 11 rows. The config problem is shown without its value | `Select provider to login  Type to search ⏎ submit Anthropic (Claude Code login) ▾ [ Cancel ]` / `Config entry providers.leaky.apiKey looks like a credential and was ignored. Use /login to sign in to leaky.` |
+| 2 | Type `local`, Enter | Fuzzy filter, then the masked key step in the same pane | `Local Test — not logged in` → `Local Test API key: Paste or type the key` |
+| 3 | Type `nmgtest-wrong-key`, Enter | Masked, validated, refused | `Local Test API key: •••••••••••••••••` / `Invalid Local Test API key; nothing was saved.` (mock: `GET /v1/models auth=other`) |
+| 4 | `/login` → Local Test → `nmgtest-valid-key` | Validated. The save was refused because the keychain is locked | mock `auth=valid` / `The macos keyring is locked; the credential for local-test was not changed.` |
+| 5 | `/logout`, Esc | Only Anthropic is listed (nothing stored), and Esc cancels | `Select provider to logout Anthropic (Claude Code login)` / `Logout cancelled.` |
+| 6 | `/login`, Enter on Anthropic, Esc | Claude Code's built-in login ran, and was cancelled | `Login … Select login method: ❯ 1. Claude account with subscription …` |
+| 7 | `/login` + `opencode`, `cline`, `codex`, `xai`, `filler`, `leaky` | Rows and status. xAI is absent (`xai` only fuzzy-matches OpenAI Codex), and `leaky` is absent | `OpenCode Go — not logged in`, `ClinePass — not logged in`, `OpenAI Codex — not logged in`, `Filler 1`, `No matching providers` |
+| 8 | `/login` → OpenAI Codex, then paste `http://localhost:1455/auth/callback?code=nmgtest-code&state=wrong-state` | The pane shows the URL and the paste field, but the paste reached the chat prompt and was sent to the model (C3) | `Log in to OpenAI Codex  Open this URL, sign in, then paste… Redirect URL or code: Paste here` / `❯ http://localhost:1455/auth/callback?code=nmgtest-code&state=wrong-state` |
+| 9 | `/login` while the step-8 flow was pending | The old flow was cancelled, and the new pane closed and could not be reopened (H1) | `Login cancelled.` / `The login pane could not be shown: unasked below 110 columns (91 now, an id the person opened before)…` / `Login cancelled.` |
+| 10 | Fresh `/login` → Codex, then type `z` | Reproduced C3 from a clean state: the field stays empty and `z` lands in the chat prompt | `Redirect URL or code: Paste here` / `❯ z` |
 
 Not driven live:
-- The steps after the picker (masked key, OAuth paste, account picker), which cannot be reached at this width. The herdr client window could not be widened to 144 columns from the worker.
-- A real Codex OAuth sign-in, which needs the user's own login.
+- A successful API-key save, the account picker and logout of a stored account (AC6, AC8). These need the user's keychain unlocked.
+- A real Codex OAuth sign-in. It needs the user's own login and is blocked by C3 in any case.
+- Picking Anthropic in `/logout`, which would sign the user out of Claude.
+
+Side effect: the Codex step runs `open <authorize URL>`, so each Codex attempt opened a browser tab at auth.openai.com. No sign-in was done.
 
 ---
 
@@ -166,7 +184,7 @@ Not driven live:
 
 | Severity | Category | Location | Original Issue | Fix Applied | Routing |
 |----------|----------|----------|----------------|-------------|---------|
-| — | — | — | None. The verify publication scope allows only this report, and C2 needs a code change | — | — |
+| — | — | — | None. The verify publication scope allows only this report, and C3 and H1 need code changes | — | — |
 
 ## Remaining Issues
 
@@ -175,55 +193,73 @@ Not driven live:
 | Field | Value |
 |-------|-------|
 | **Severity** | Critical |
-| **Category** | Error Handling / Architecture |
-| **Location** | `src/login/command-flow.ts` (`start`), `hooks/register.ts` (`command.run`), `src/login/pane.ts` (`open`) |
-| **Issue** | The pane is opened after the `command.run` hook has answered, so the host treats it as unasked and draws it only from 144 columns (C2) |
-| **Impact** | On terminals under 144 columns, `/login` and `/logout` show no picker, and AC5–AC8 cannot be completed |
-| **Reason Not Fixed** | The verify scope allows only the report. Suggested fix: open the pane with `$.ui.open` inside the hook before it returns. This is a `$` call, so it pauses the budget, and it is placed because it answers the person's command. Then return `{}` and let the picks resolve from `ui.render` callbacks. Make the fake engine refuse to place panes opened outside the person's command hook below 144 columns, and add a test for that |
+| **Category** | Error Handling / Security |
+| **Location** | `src/login/pane.ts` (`drawText`, held-pane `open`), `src/login/login-command.ts` (`oauthFlow`) |
+| **Issue** | C3: the OAuth "Redirect URL or code" input has no keyboard focus, and keystrokes and pastes go to Claude's chat prompt. The API-key step does receive input, so the difference is in the OAuth path. Possible causes: `oauthFlow` writes `host.ui.log(...)` and runs `open <url>` (the browser takes the terminal's focus) between the select and text steps, while the held pane shows only `Working…` with nothing focusable. Or `drawText`'s `Input` is uncontrolled (no `value`) |
+| **Impact** | AC7 cannot be completed. A person who pastes the redirect URL sends the authorization code to the model and the transcript |
+| **Reason Not Fixed** | The verify scope allows only the report. Suggested fix: re-assert focus when the text step is drawn (a focused element, or re-request focus on the held pane after `log` and `open`), make the Input controlled like the secret field, and add a fake-engine focus model with a test |
+
+### High Priority
+
+| Field | Value |
+|-------|-------|
+| **Severity** | High |
+| **Category** | Error Handling |
+| **Location** | `src/login/command-flow.ts` (`start`: `.finally(() => pane.end())`), `src/login/pane.ts` (`begin`, `end`) |
+| **Issue** | H1: a superseded flow's `end()` closes the pane that the next command's `begin()` just opened |
+| **Impact** | Re-running `/login` or `/logout` while a step is pending fails with "could not be shown … unasked", and the person must run it again |
+| **Reason Not Fixed** | The verify scope allows only the report. Suggested fix: have `begin` return a token or generation, and let `end(token)` close only the pane it opened. Or skip `end()` when the flow was superseded. Add a test that runs two `start()` calls back to back |
 
 ### Medium Priority
 
 | Field | Value |
 |-------|-------|
 | **Severity** | Medium |
-| **Category** | Error Handling |
-| **Location** | `src/login/pane.ts`, `src/login/command-flow.ts` |
-| **Issue** | A flow waiting on an undrawn pane stays pending until another command replaces it (M1) |
-| **Impact** | A login that cannot be seen stays pending with no way to end it |
-| **Reason Not Fixed** | It is part of the C2 fix |
+| **Category** | Verification evidence |
+| **Location** | Environment |
+| **Issue** | The login keychain is locked in this verification session (`security` exit 36), so AC6's success path and AC8's account steps have no live evidence |
+| **Reason Not Fixed** | Unlocking needs the user's password. The user should run these steps with an unlocked keychain, or verification should run where the keychain is unlocked |
 
 ### Low Priority
 
 | Field | Value |
 |-------|-------|
 | **Severity** | Low |
+| **Category** | Usability |
+| **Location** | `src/login/pane.ts` (`drawSelect`, `drawSecret`, `drawText`) |
+| **Issue** | L2: children of the root `Box` are laid out in a row. Title, hint, field and button sit side by side, and the OAuth URL wraps inside a 23-column cell, so it cannot be copied cleanly from the pane |
+| **Reason Not Fixed** | The verify scope allows only the report. Suggested fix: `flexDirection: "column"` on the root `Box` |
+
+| Field | Value |
+|-------|-------|
+| **Severity** | Low |
 | **Category** | Security hygiene |
 | **Location** | `src/login/login-command.ts` |
-| **Issue** | The OAuth authorize URL is also written to the transcript (L1). It holds no secret |
+| **Issue** | L1 (carried over): the OAuth authorize URL is also written to the transcript. It holds no secret, and while L2 stands it is the only copyable form |
 | **Reason Not Fixed** | Optional; this is a product choice |
 
 ---
 
 ## Positive Observations
 
-- C1 is fixed. The hook answers within budget, and a failed `/logout` can no longer sign the person out of Claude.
-- Credential hygiene is strong, and the live config refusal names the path without the value.
-- Provider plugins, the catalog and auth are cleanly separated and fully unit-tested.
+- C2 and M1 are fixed. The picker draws at 91 columns, and a pane that cannot be placed ends the step instead of hanging.
+- The Anthropic hand-off runs Claude Code's own login, and the mod stays out of it.
+- Credential hygiene holds live: the key is masked, an invalid key is not saved, the config sentinel is not echoed, and a locked keyring fails closed with no vault fallback.
 
 ---
 
 ## Recommendations Summary
 
 ### Before PR (Must)
-- [ ] C2: open the login/logout pane inside the person's `command.run` hook so it is placed at any width
-- [ ] Model the asked/unasked placement rule in the fake engine and add a regression test
-- [ ] Re-run interactive verification for AC5–AC8 at a terminal under 144 columns, including `/logout` of a stored dummy credential
+- [ ] C3: give the OAuth paste field keyboard focus, and add a focus-aware fake-engine test
+- [ ] H1: tie `end()` to the `begin()` that opened the pane, and add a test with a second command while a flow is pending
+- [ ] Re-run interactive verification for AC6–AC8 with an unlocked keychain, including a stored dummy credential and `/logout` of it
 
 ### Short Term (Should)
-- [ ] M1: settle and close a pane that is never placed
+- [ ] L2: lay out the pane as a column so the URL and fields are readable
 
 ### Long Term (Could)
-- [ ] L1: drop the transcript copy of the OAuth URL
+- [ ] L1: drop the transcript copy of the OAuth URL once the pane shows it copyably
 
 ---
 
@@ -231,4 +267,4 @@ Not driven live:
 
 **Needs fixes**
 
-The budget fix works, but the picker it opens is not drawn on terminals under 144 columns. Verification is **Fail** until the pane opens as an asked pane and AC5–AC8 are shown working interactively.
+The C2 fix works and the picker is usable at ordinary widths. Verification is **Fail** until C3 and H1 are fixed and AC6–AC8 are shown working interactively.

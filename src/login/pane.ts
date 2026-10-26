@@ -11,6 +11,13 @@ import { applyInput, maskOf } from "./masked-input.ts";
 // press is behind its open; one opened later waits undrawn below 144 columns. A
 // command therefore opens the pane with `begin` inside its hook and holds it:
 // each step's `open` swaps the drawn view, and `end` closes it after the flow.
+//
+// `autoFocus` places the focus ring only as the pane takes the keyboard, and the
+// keys go back to the prompt while the pane holds nothing focusable. So the
+// "Working…" view between steps keeps a Cancel button, and each held step moves
+// the ring onto its field with `ui.focus`, asking for the keys again if the pane
+// lost them. A `begin` hands back its hold, and only that hold's `end` closes the
+// pane, so a flow superseded by the next command cannot close that command's pane.
 
 export const PANE_ID = "nmg-router-login";
 
@@ -59,14 +66,19 @@ type Pending = {
   settled: boolean;
 };
 
-export type PaneBegin = { readonly isPlaced: true } | { readonly isPlaced: false; readonly reason: string };
+// One command's claim on the held pane. `closed` once the person closes it, so
+// the flow's later steps end instead of reopening a pane nobody asked for.
+export type PaneHold = { readonly host: PaneHost; closed: boolean };
+
+export type PaneBegin = { readonly isPlaced: true; readonly hold: PaneHold } | { readonly isPlaced: false; readonly reason: string };
 
 export type PaneController = {
   // Opens and holds the pane for a command's flow. Called inside the command's
   // hook, so the open answers the person's command and is placed at any width.
   begin(host: PaneHost, title: string): Promise<PaneBegin>;
-  // Closes a held pane once the flow is done; a pane already gone is left alone.
-  end(): Promise<void>;
+  // Closes the pane `hold` holds once its flow is done. A hold a later `begin`
+  // replaced, or a pane already gone, is left alone.
+  end(hold: PaneHold): Promise<void>;
   open(host: PaneHost, view: PaneView): Promise<PaneResult>;
   draw(elements: PaneElements): RenderElement;
   // Called on `ui.close` for the pane. A close the controller asked for has
@@ -75,10 +87,12 @@ export type PaneController = {
   isOpen(): boolean;
 };
 
+const OPEN_ARGS = { id: PANE_ID, focus: true, closeOnEscape: true, holdToasts: true } as const;
+
 export function createPaneController(): PaneController {
   let pending: Pending | undefined;
-  // The host of a pane held open by `begin`, until `end` or the host closes it.
-  let held: PaneHost | undefined;
+  // The pane held open by the latest `begin`, until its `end`.
+  let held: PaneHold | undefined;
 
   function settle(result: PaneResult, closePane: boolean): void {
     const current = pending;
@@ -86,16 +100,37 @@ export function createPaneController(): PaneController {
     current.settled = true;
     pending = undefined;
     current.resolve(result);
-    if (held !== undefined) {
+    if (held !== undefined && !held.closed) {
       // A held pane stays up for the flow's next step.
       redraw(current);
       return;
     }
-    if (closePane) current.host.ui.close({ id: PANE_ID }).catch(() => undefined);
+    if (closePane && held === undefined) current.host.ui.close({ id: PANE_ID }).catch(() => undefined);
   }
 
   function redraw(state: Pending): void {
     state.host.ui.invalidate("ui.render");
+  }
+
+  // The element a step's keys belong to, by the key it is drawn under.
+  function fieldOf(view: PaneView): string {
+    if (view.kind === "secret") return "secret";
+    if (view.kind === "text") return "paste";
+    if (view.rows.length > SEARCH_THRESHOLD) return "search";
+    return view.rows.length === 0 ? "cancel" : "pick";
+  }
+
+  // Puts the ring on the step's field. A held pane that lost the keyboard while
+  // the flow worked asks for it again, as its first open did, and retries once.
+  async function focusStep(hold: PaneHold, view: PaneView): Promise<void> {
+    const target = { requestId: PANE_ID, key: fieldOf(view) };
+    try {
+      if ((await hold.host.ui.focus(target)).deny === undefined || hold !== held || hold.closed) return;
+      const opened = await hold.host.ui.open({ ...OPEN_ARGS, title: view.title });
+      if (opened.isPlaced && hold === held && !hold.closed) await hold.host.ui.focus(target);
+    } catch {
+      // The person can still click or Tab into the field.
+    }
   }
 
   function drawSelect(elements: PaneElements, state: Pending, view: Extract<PaneView, { kind: "select" }>): RenderElement {
@@ -143,7 +178,7 @@ export function createPaneController(): PaneController {
       );
     }
     children.push(Button({ key: "cancel", label: "Cancel", onPress: () => settle({ kind: "cancelled" }, true) }));
-    return Box({ children });
+    return Box({ flexDirection: "column", children });
   }
 
   function drawSecret(elements: PaneElements, state: Pending, view: Extract<PaneView, { kind: "secret" }>): RenderElement {
@@ -165,7 +200,7 @@ export function createPaneController(): PaneController {
       }),
       Button({ key: "cancel", label: "Cancel", onPress: () => settle({ kind: "cancelled" }, true) }),
     ];
-    return Box({ children });
+    return Box({ flexDirection: "column", children });
   }
 
   function drawText(elements: PaneElements, state: Pending, view: Extract<PaneView, { kind: "text" }>): RenderElement {
@@ -186,30 +221,29 @@ export function createPaneController(): PaneController {
       }),
       Button({ key: "cancel", label: "Cancel", onPress: () => settle({ kind: "cancelled" }, true) }),
     ];
-    return Box({ children });
+    return Box({ flexDirection: "column", children });
   }
-
-  const OPEN_ARGS = { id: PANE_ID, focus: true, closeOnEscape: true, holdToasts: true } as const;
 
   return {
     async begin(host, title) {
       settle({ kind: "cancelled" }, false);
-      held = host;
+      const hold: PaneHold = { host, closed: false };
+      held = hold;
       try {
         const opened = await host.ui.open({ ...OPEN_ARGS, title });
-        if (opened.isPlaced) return { isPlaced: true };
-        await this.end();
+        if (opened.isPlaced) return { isPlaced: true, hold };
+        await this.end(hold);
         return { isPlaced: false, reason: opened.reason };
       } catch {
-        held = undefined;
+        if (held === hold) held = undefined;
         return { isPlaced: false, reason: "the host refused to open it" };
       }
     },
-    async end() {
-      const host = held;
+    async end(hold) {
+      if (hold !== held) return;
       held = undefined;
       settle({ kind: "cancelled" }, false);
-      if (host !== undefined) await host.ui.close({ id: PANE_ID }).catch(() => undefined);
+      if (!hold.closed) await hold.host.ui.close({ id: PANE_ID }).catch(() => undefined);
     },
     async open(host, view) {
       settle({ kind: "cancelled" }, false);
@@ -217,8 +251,12 @@ export function createPaneController(): PaneController {
         pending = { view, host, resolve, query: "", secret: "", typed: "", settled: false };
       });
       if (held !== undefined) {
-        // The held pane is already placed; reopening it would be an unasked open.
-        host.ui.invalidate("ui.render");
+        // The person closed the held pane while the flow worked: the step ends.
+        if (held.closed) settle({ kind: "cancelled" }, false);
+        else {
+          host.ui.invalidate("ui.render");
+          void focusStep(held, view);
+        }
         return result;
       }
       try {
@@ -237,8 +275,25 @@ export function createPaneController(): PaneController {
       const state = pending;
       if (state === undefined) {
         // Between a held pane's steps, while the flow works on the last answer.
-        const working = elements.Text({ dimColor: true, children: "Working…" });
-        return elements.Box({ children: held === undefined ? [] : [working] });
+        // The button keeps a focusable element in the pane, so it keeps the keys.
+        const hold = held;
+        if (hold === undefined || hold.closed) return elements.Box({ children: [] });
+        const { Box, Text, Button } = elements;
+        return Box({
+          flexDirection: "column",
+          children: [
+            Text({ dimColor: true, children: "Working…" }),
+            Button({
+              key: "cancel",
+              label: "Cancel",
+              autoFocus: true,
+              onPress: () => {
+                hold.closed = true;
+                hold.host.ui.close({ id: PANE_ID }).catch(() => undefined);
+              },
+            }),
+          ],
+        });
       }
       switch (state.view.kind) {
         case "select":
@@ -250,7 +305,7 @@ export function createPaneController(): PaneController {
       }
     },
     closedByHost() {
-      held = undefined;
+      if (held !== undefined) held.closed = true;
       settle({ kind: "cancelled" }, false);
     },
     isOpen() {
