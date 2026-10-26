@@ -1,0 +1,57 @@
+**Issue**: #2
+**Date**: 2026-10-25
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/1-lay-the-mod-foundation-with-the-anthropic-guard-and-os-keyring-credentials/
+
+# File: tests/features/provider-catalog-login.feature
+# Generated from: specs/2-add-the-provider-catalog-with-provider-aware-login-and-logout/requirements.md
+Feature: Provider catalog with provider-aware /login and /logout
+
+  @SCN001
+  Scenario: Built-in providers are present and none is Anthropic
+    Given no user configuration
+    When providers are listed
+    Then "opencode-go", "cline-pass", "openai-codex" and "xai" are present with a base URL, a login kind and a per-model wire format, and none is Anthropic
+
+  @SCN002
+  Scenario: OpenCode Go models are discovered with wire format and metadata
+    Given a stored "opencode-go" key and a model list of "glm-5.1", "kimi-k3", "gpt-5.5", "minimax-m2.5" and "claude-haiku-5-5"
+    When discovery runs
+    Then the catalog lists "opencode-go/glm-5.1", "opencode-go/kimi-k3", "opencode-go/gpt-5.5" and "opencode-go/minimax-m2.5" with their wire formats and supplied metadata, and no "claude-haiku-5-5"
+
+  @SCN003
+  Scenario: Cache is used on load and failures keep cached models
+    Given a cached model list and providers answering 401, 404, an empty list and a network error
+    When the catalog loads and then refreshes
+    Then the load makes no network call, and the providers record "unauthenticated", "unavailable", "empty" and "offline" with their cached models marked as cached
+
+  @SCN004
+  Scenario: Custom provider and filters apply, and a credential in config is rejected
+    Given a config with a custom OpenAI-compatible provider, disabledProviders ["xai"], enabledModels patterns, and an entry holding an API key
+    When the catalog loads
+    Then the custom provider appears, xAI is hidden, only matching models are listed, and the key entry is rejected pointing to "/login" without echoing the value
+
+  @SCN005
+  Scenario: Login picker lists providers and Anthropic passes through
+    Given the catalog
+    When the user runs "/login" and chooses Anthropic
+    Then the picker listed Anthropic and every enabled provider with its status, and Claude Code's built-in login ran through next(e) with nothing read or stored by the mod
+
+  @SCN006
+  Scenario: API-key login validates before saving
+    Given the user chooses OpenCode Go
+    When they enter a key in the masked input
+    Then a valid key is saved and "Logged in to OpenCode Go" is shown with models refreshed, and an invalid key saves nothing and shows an error
+
+  @SCN007
+  Scenario: OAuth login by paste and token refresh
+    Given the user chooses OpenAI Codex
+    When they paste the redirect URL shown after signing in
+    Then the tokens and expiry are saved, the account email is shown, no port is opened, and an expired token is refreshed and saved before the next request
+
+  @SCN008
+  Scenario: Logout lists stored accounts and deletes the chosen one
+    Given two stored OpenAI Codex accounts
+    When the user runs "/logout"
+    Then only providers with credentials are listed, the active account is marked, the chosen credential is deleted, and choosing Anthropic runs the built-in logout through next(e)
