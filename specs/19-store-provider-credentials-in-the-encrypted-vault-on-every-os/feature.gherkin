@@ -1,0 +1,54 @@
+**Issue**: #19
+**Date**: 2026-10-26
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/1-lay-the-mod-foundation-with-the-anthropic-guard-and-os-keyring-credentials/
+
+# File: tests/features/vault-everywhere.feature
+# Generated from: specs/19-store-provider-credentials-in-the-encrypted-vault-on-every-os/requirements.md
+Feature: Provider credentials in the encrypted vault on every OS
+
+  @SCN001
+  Scenario Outline: The vault stores credentials on <platform>
+    Given a faked engine for "<platform>"
+    When a credential for "opencode-go/default" is saved, read, listed and deleted through the credential store
+    Then "vault.json" and "vault.key" are written under "<directory>"
+    And "vault.json" holds ciphertext and not the secret
+    And the read returns the saved secret and the list returns "opencode-go/default"
+    And after the delete "vault.json" has no "opencode-go/default" entry
+    And no "security", "powershell.exe" or "secret-tool" process runs
+
+    Examples:
+      | platform | directory                                            |
+      | macos    | /Users/tester/Library/Application Support/nmg-router |
+      | windows  | C:\Users\tester\AppData\Local\nmg-router             |
+      | linux    | /home/tester/.local/share/nmg-router                 |
+      | other    | /home/tester/.local/share/nmg-router                 |
+
+  @SCN002
+  Scenario: Vault protections hold on POSIX
+    Given a faked Linux engine
+    When the first credential is saved through the credential store
+    Then the directory is created with mode 700 before any write
+    And each written vault file is set to mode 600
+    And a failing directory step raises "vault_failed" with nothing written
+    And a malformed "vault.key" beside existing entries raises "vault_failed" and is not regenerated
+
+  @SCN003
+  Scenario: No keyring code remains
+    Given the change is complete
+    When the source and tests are inspected
+    Then no keyring backend module, keyring routing, keyring simulation, "keyring_locked", "keyring_failed" or "NoKeyringError" remains
+
+  @SCN004
+  Scenario: Callers see the same store
+    Given code that uses createCredentialStore
+    When it saves, reads, lists and deletes credentials, and tries to save an "anthropic" credential
+    Then the operations behave as before, the "anthropic" save is refused with no process run or file written, and the sentinel secret reaches no recorded surface
+
+  @SCN005
+  Scenario: README describes the vault on every OS
+    Given the README "Credential security" section
+    When it is read
+    Then it says credentials are kept in the encrypted vault on every OS with each OS's directory and the hardening steps
+    And it does not mention Keychain, Credential Manager, Secret Service, secret-tool or libsecret
