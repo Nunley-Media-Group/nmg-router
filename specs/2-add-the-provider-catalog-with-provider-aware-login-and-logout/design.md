@@ -116,7 +116,7 @@ src/errors/errors.ts              (modify) LoginError, ConfigProblem
 
 ## Data / Storage Changes
 
-**Credential secrets** (keyring through `createCredentialStore`, one JSON string per account):
+**Credential secrets** (credential vault through `createCredentialStore`, one JSON string per account):
 - API key: `{"type":"api-key","key":"…"}`, saved under account `default`. A new key replaces it, and any other accounts for that provider are deleted first.
 - OAuth: `{"type":"oauth","access":"…","refresh":"…","expires":<epoch ms>,"accountId":"…"}`, saved under the account id. The account id is `accountId` lowercased, with each character outside `[a-z0-9._-]` replaced by `-`, cut to 64 characters, and a leading non-alphanumeric character replaced by `a`. A login for an existing account id overwrites it.
 
