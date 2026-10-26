@@ -1,8 +1,8 @@
-import type { EngineInterface } from "claude-code";
+import type { HostPort } from "../host.ts";
 
 export type Platform = "macos" | "windows" | "linux" | "other";
 
-export type PlatformDeps = Pick<EngineInterface, "env" | "process">;
+export type PlatformDeps = Pick<HostPort, "env" | "process">;
 
 // One backend per storage location. Each call receives the provider and the
 // account separately.

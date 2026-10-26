@@ -1,8 +1,9 @@
-import type { EngineInterface } from "claude-code";
+import type { HostPort } from "../host.ts";
 import { CredentialError } from "../errors/errors.ts";
 import { accountKey, fromBase64, toBase64, type CredentialBackend } from "./platform.ts";
+import { gcm } from "../vendor/noble-ciphers/aes.js";
 
-export type VaultDeps = Pick<EngineInterface, "env" | "fs" | "process">;
+export type VaultDeps = Pick<HostPort, "env" | "fs" | "process">;
 
 const VAULT_VERSION = 1;
 const KEY_BYTES = 32;
@@ -10,19 +11,6 @@ const IV_BYTES = 12;
 
 type VaultEntry = { iv: string; ct: string };
 type VaultFile = { version: number; entries: Record<string, VaultEntry> };
-
-// The slice of crypto.subtle this file uses. The host's declared `crypto`
-// covers digest and random values only.
-type AesParams = { name: "AES-GCM"; iv: Uint8Array; additionalData: Uint8Array; tagLength: 128 };
-type Subtle = {
-  importKey(format: "raw", key: Uint8Array, algorithm: "AES-GCM", extractable: false, usages: string[]): Promise<unknown>;
-  encrypt(params: AesParams, key: unknown, data: Uint8Array): Promise<ArrayBuffer>;
-  decrypt(params: AesParams, key: unknown, data: Uint8Array): Promise<ArrayBuffer>;
-};
-
-function subtle(): Subtle {
-  return (globalThis.crypto as unknown as { subtle: Subtle }).subtle;
-}
 
 function encode(text: string): Uint8Array {
   return new TextEncoder().encode(text);
@@ -95,24 +83,16 @@ async function loadVault(deps: VaultDeps, vaultPath: string): Promise<VaultFile 
   return { version: VAULT_VERSION, entries: parsed.entries as Record<string, VaultEntry> };
 }
 
-async function seal(key: Uint8Array, aad: string, plaintext: string): Promise<VaultEntry> {
+// AES-256-GCM from the vendored @noble/ciphers: the host's crypto.subtle offers
+// digest only. The output matches WebCrypto's, with the 128-bit tag after the ciphertext.
+function seal(key: Uint8Array, aad: string, plaintext: string): VaultEntry {
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
-  const cryptoKey = await subtle().importKey("raw", key, "AES-GCM", false, ["encrypt", "decrypt"]);
-  const cipher = await subtle().encrypt(
-    { name: "AES-GCM", iv, additionalData: encode(aad), tagLength: 128 },
-    cryptoKey,
-    encode(plaintext),
-  );
-  return { iv: toBase64(iv), ct: toBase64(new Uint8Array(cipher)) };
+  const cipher = gcm(key, iv, encode(aad)).encrypt(encode(plaintext));
+  return { iv: toBase64(iv), ct: toBase64(cipher) };
 }
 
-async function open(key: Uint8Array, aad: string, entry: VaultEntry): Promise<string> {
-  const cryptoKey = await subtle().importKey("raw", key, "AES-GCM", false, ["encrypt", "decrypt"]);
-  const plain = await subtle().decrypt(
-    { name: "AES-GCM", iv: fromBase64(entry.iv), additionalData: encode(aad), tagLength: 128 },
-    cryptoKey,
-    fromBase64(entry.ct),
-  );
+function open(key: Uint8Array, aad: string, entry: VaultEntry): string {
+  const plain = gcm(key, fromBase64(entry.iv), encode(aad)).decrypt(fromBase64(entry.ct));
   return new TextDecoder().decode(plain);
 }
 
@@ -146,7 +126,7 @@ export function createVault(deps: VaultDeps, platform: string): CredentialBacken
           await writeFile(deps, platform, keyPath, toBase64(key));
         }
         const doc: VaultFile = existing ?? { version: VAULT_VERSION, entries: {} };
-        doc.entries[id] = await seal(key, `nmg-router:${id}`, secret);
+        doc.entries[id] = seal(key, `nmg-router:${id}`, secret);
         await writeFile(deps, platform, vaultPath, JSON.stringify(doc));
       });
     },

@@ -1,6 +1,6 @@
-// Typed errors for the guard, the provider registry and the credential store.
-// Messages name a model, a provider or a platform. They never carry a secret,
-// a response body or a child process's stderr.
+// Typed errors for the guard, the provider registry, the credential store and
+// the login flows. Messages name a model, a provider, a platform or a config
+// path. They never carry a secret, a response body or a child process's stderr.
 
 export type CredentialErrorCode = "anthropic_refused" | "invalid_id" | "vault_failed";
 
@@ -86,5 +86,97 @@ export class CredentialError extends Error {
     this.code = code;
     this.platform = detail.platform;
     this.provider = detail.provider;
+  }
+}
+
+export type LoginErrorCode =
+  | "invalid_key"
+  | "validation_failed"
+  | "offline"
+  | "oauth_state_mismatch"
+  | "oauth_exchange_failed"
+  | "oauth_no_account"
+  | "refresh_failed"
+  | "cancelled";
+
+export type LoginErrorDetail = {
+  // The provider's display name, never its key, token or response body.
+  readonly name: string;
+  readonly status?: number;
+};
+
+function loginMessage(code: LoginErrorCode, detail: LoginErrorDetail): string {
+  const { name, status } = detail;
+  const statusNote = status === undefined ? "" : ` (HTTP ${status})`;
+  switch (code) {
+    case "invalid_key":
+      return `Invalid ${name} API key; nothing was saved.`;
+    case "validation_failed":
+      return `Could not validate the ${name} key${statusNote}; nothing was saved.`;
+    case "offline":
+      return `Could not reach ${name} to validate the sign-in; nothing was saved.`;
+    case "oauth_state_mismatch":
+      return `The pasted ${name} redirect does not match this sign-in; nothing was saved.`;
+    case "oauth_exchange_failed":
+      return `${name} did not issue tokens${statusNote}; nothing was saved.`;
+    case "oauth_no_account":
+      return `${name} returned no account id; nothing was saved.`;
+    case "refresh_failed":
+      return `Could not refresh the ${name} sign-in${statusNote}; sign in again with /login.`;
+    case "cancelled":
+      return `${name} login cancelled.`;
+  }
+}
+
+export class LoginError extends Error {
+  readonly code: LoginErrorCode;
+  readonly providerName: string;
+  readonly status: number | undefined;
+
+  constructor(code: LoginErrorCode, detail: LoginErrorDetail) {
+    super(loginMessage(code, detail));
+    this.name = "LoginError";
+    this.code = code;
+    this.providerName = detail.name;
+    this.status = detail.status;
+  }
+}
+
+export type ConfigProblemCode =
+  | "malformed_file"
+  | "invalid_id"
+  | "invalid_entry"
+  | "builtin_id"
+  | "anthropic_entry"
+  | "credential";
+
+// A config problem names the file or entry path and never the value that caused it.
+export class ConfigProblem extends Error {
+  readonly code: ConfigProblemCode;
+  readonly path: string;
+
+  constructor(code: ConfigProblemCode, path: string, providerId?: string) {
+    super(configMessage(code, path, providerId));
+    this.name = "ConfigProblem";
+    this.code = code;
+    this.path = path;
+  }
+}
+
+function configMessage(code: ConfigProblemCode, path: string, providerId: string | undefined): string {
+  const id = providerId ?? "the provider";
+  switch (code) {
+    case "malformed_file":
+      return `${path} is not valid JSON, so no providers were loaded from it.`;
+    case "invalid_id":
+      return `Config entry ${path} has an invalid provider id and was ignored.`;
+    case "invalid_entry":
+      return `Config entry ${path} needs a baseUrl and an api of openai-completions, openai-responses or anthropic-messages; it was ignored.`;
+    case "builtin_id":
+      return `Config entry ${path} names a built-in provider and was ignored. Use /login to sign in to ${id}.`;
+    case "anthropic_entry":
+      return `Config entry ${path} names Anthropic and was ignored. Use /login to sign in to Anthropic through Claude Code.`;
+    case "credential":
+      return `Config entry ${path} looks like a credential and was ignored. Use /login to sign in to ${id}.`;
   }
 }

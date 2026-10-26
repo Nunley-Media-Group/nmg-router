@@ -4,5 +4,5 @@
     "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true
   },
-  "include": ["hooks", "src", "scripts", "tests"]
+  "include": ["hooks", "src", "scripts", "tests", "host-tests"]
 }

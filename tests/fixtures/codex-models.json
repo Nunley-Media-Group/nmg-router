@@ -1,0 +1,17 @@
+{
+  "models": [
+    {
+      "slug": "gpt-5.5",
+      "display_name": "GPT-5.5",
+      "context_window": 272000,
+      "supported_reasoning_levels": [{ "effort": "low" }, { "effort": "medium" }, { "effort": "high" }, { "effort": "xhigh" }],
+      "input_modalities": ["text", "image"],
+      "visibility": "list"
+    },
+    {
+      "slug": "gpt-internal-preview",
+      "display_name": "Internal Preview",
+      "visibility": "hide"
+    }
+  ]
+}

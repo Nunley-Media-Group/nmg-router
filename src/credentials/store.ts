@@ -1,10 +1,10 @@
-import type { EngineInterface } from "claude-code";
+import type { HostPort } from "../host.ts";
 import { isAnthropicProvider } from "../gateway/anthropic.ts";
 import { CredentialError } from "../errors/errors.ts";
 import { detectPlatform, type CredentialBackend } from "./platform.ts";
 import { createVault } from "./vault.ts";
 
-export type CredentialStoreDeps = Pick<EngineInterface, "env" | "fs" | "process" | "store">;
+export type CredentialStoreDeps = Pick<HostPort, "env" | "fs" | "process" | "store">;
 
 export type StoredCredential = { readonly provider: string; readonly account: string };
 
