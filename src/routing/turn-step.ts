@@ -15,6 +15,7 @@ export async function* routeStep(
   e: TurnStepInput,
   next: StepNext,
 ): AsyncGenerator<TurnStepChunk, TurnStepResult | void> {
+  router.observe(e);
   if (!(await router.isRouted(e.model))) return yield* next(e);
   return yield* router.answer(e, next.signal);
 }
@@ -25,6 +26,7 @@ export async function* routeStepFailed(
   e: TurnStepInput,
   next: StepNext & { readonly error?: unknown },
 ): AsyncGenerator<TurnStepChunk, TurnStepResult | void> {
+  router.observe(e);
   if (!(await router.isRouted(e.model))) return yield* next(e);
   return yield* router.fail(e, next.error);
 }

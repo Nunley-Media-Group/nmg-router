@@ -29,12 +29,14 @@ import { createTransportSelector } from "../transport/select.ts";
 import { TransportFailure, type TransportResponse } from "../transport/types.ts";
 import { readPluginVersion } from "../version.ts";
 import type { ComposeCapture } from "./compose-capture.ts";
+import { MAIN_LOOP, createSessionTracker, type SessionTracker } from "./session-tracker.ts";
 import { speedOf, withSpeed, type SpeedRecord } from "./metrics.ts";
 import { errorStatusText, statusText, thinkingOf } from "./status.ts";
 
 // Answers a routed model's turn step through the provider's wire. It sends one
 // request, streams the reply back as engine chunks, and answers any failure with
-// its message. It never calls `next`, so no step reaches Claude.
+// its message. It never calls `next`, so no step reaches Claude. `complete` sends
+// the same guarded request outside a turn and returns the reply's text.
 
 // The host calls the router makes. Each one is written literally in hooks/register.ts.
 export type RouterHost = HostPort & {
@@ -45,19 +47,40 @@ export type RouterHost = HostPort & {
   readonly session: {
     id(): Promise<string>;
     messages(args: { readonly agentId?: string }): Promise<ApiMessageInput[] | { readonly deny: string }>;
+    // The model the session has selected, and its working directory.
+    model(): Promise<string>;
+    cwd(): Promise<string>;
+    // Resolves an opaque handle or null. The mod reads only whether it is null.
+    authorize(): Promise<unknown>;
+    compact(): Promise<unknown>;
   };
+  readonly model: { classify(text: string, labels: readonly string[]): Promise<string | undefined> };
+  readonly config: { list(): Promise<readonly { readonly key: string; readonly value: unknown }[]> };
+  readonly clock: { after(ms: number, fn: () => void): unknown };
   readonly prompt: { compose(args: { readonly model: string }): Promise<PromptComposeResult> };
   readonly tool: { list(): Promise<ToolInfo[]> };
   readonly pluginRoot: () => string;
+};
+
+// What the router knows about a routed model for the hooks around a turn.
+export type RoutedModelInfo = {
+  readonly provider: string;
+  readonly contextWindow: number | undefined;
+  readonly maxOutput: number | undefined;
 };
 
 export type Router = {
   // True when the model's provider is in the catalog. A Claude model or alias never is,
   // and asking costs no call.
   isRouted(model: string): Promise<boolean>;
+  // Notes the step's model for its loop. Called for every step, Claude's too.
+  observe(e: TurnStepInput): void;
   answer(e: TurnStepInput, signal: AbortSignal): AsyncGenerator<TurnStepChunk, TurnStepResult>;
   // The `.catch` path: a hook failed on a routed step, so its message is answered.
   fail(e: TurnStepInput, error: unknown): AsyncGenerator<TurnStepChunk, TurnStepResult>;
+  // One request outside a turn. Resolves the reply's text and yields nothing to the engine. Throws a RoutedError.
+  complete(model: string, request: RoutedRequest, signal: AbortSignal): Promise<string>;
+  describe(model: string): Promise<RoutedModelInfo>;
 };
 
 type StopChunk = Extract<TurnStepChunk, { kind: "stop" }>;
@@ -70,6 +93,9 @@ type Progress = { name: string; blocks: number };
 // Progress is kept per step until the step ends, so the `.catch` answer for a hook
 // the engine failed mid-stream can read it. A few steps are kept, oldest dropped.
 const KEPT_STEPS = 16;
+
+// The turn id a summary request carries on its stream. A summary is not a turn.
+const SUMMARY_TURN = "compaction";
 
 function stepKey(e: TurnStepInput): string {
   return `${e.agentId ?? ""}:${e.turnId}:${e.index}`;
@@ -181,7 +207,24 @@ function toRouted(name: string, error: unknown): RoutedError {
   return classify(name, { kind: "named", error: "internal" });
 }
 
-export function createRouter(host: RouterHost, capture: ComposeCapture): Router {
+// What a send needs from the host besides the request. Read after the request is checked.
+type SendContext = {
+  readonly auth: Auth | undefined;
+  readonly platform: string;
+  readonly sessionId: string;
+  readonly pluginVersion: string;
+};
+
+// The reply of one send: its tally, the send's start and first-token times, and
+// whether the signal ended it early.
+type Reply = {
+  readonly tally: Tally;
+  readonly aborted: boolean;
+  readonly sentAt: number;
+  readonly firstAt: number | undefined;
+};
+
+export function createRouter(host: RouterHost, capture: ComposeCapture, tracker: SessionTracker = createSessionTracker()): Router {
   const services = createServices(host);
   const { catalog, credentials } = services;
   const transportFor = createTransportSelector({
@@ -210,6 +253,27 @@ export function createRouter(host: RouterHost, capture: ComposeCapture): Router 
     return auth;
   }
 
+  // The wire and base URL a model's requests use: the catalog's, else the provider's default.
+  function wireOf(plugin: ProviderPlugin, model: string, providerModel: string) {
+    const listed = catalog.models().find((entry) => entry.id === model);
+    const metadata = metadataFor(model);
+    const resolved: ResolvedWire =
+      listed !== undefined
+        ? { wire: listed.wire, baseUrl: listed.baseUrl }
+        : plugin.wire(providerModel, metadata?.wire);
+    return { listed, metadata, resolved };
+  }
+
+  // Checks the request, then reads what the send needs, in that order.
+  async function contextFor(plugin: ProviderPlugin, model: string, resolved: ResolvedWire): Promise<SendContext> {
+    checkRequest({ provider: plugin.identity.id, model, baseUrl: resolved.baseUrl });
+    const auth = await credentialFor(plugin);
+    const platform = await services.platform();
+    const sessionId = await host.session.id();
+    const pluginVersion = await (version ??= readPluginVersion(host.fs, host.pluginRoot()));
+    return { auth, platform, sessionId, pluginVersion };
+  }
+
   async function systemFor(model: string): Promise<string> {
     const rendered = await host.prompt.compose({ model });
     return rendered.sections.map((section) => section.text).join("\n\n");
@@ -228,8 +292,77 @@ export function createRouter(host: RouterHost, capture: ComposeCapture): Router 
     }
   }
 
+  // Encodes, sends and reads one reply, yielding each chunk once it passes the guard.
+  // A routed step and a summary both send through here.
+  async function* send(
+    plugin: ProviderPlugin,
+    model: string,
+    request: RoutedRequest,
+    resolved: ResolvedWire,
+    context: SendContext,
+    signal: AbortSignal,
+    where: { readonly turnId: string; readonly index: number; readonly progress?: Progress },
+  ): AsyncGenerator<TurnStepChunk, Reply> {
+    const name = plugin.identity.name;
+    const adapter = WIRE_ADAPTERS[resolved.wire];
+    const adapterContext: AdapterContext = {
+      baseUrl: resolved.baseUrl,
+      headers:
+        plugin.identity.headers?.({
+          platform: context.platform,
+          accountId: context.auth?.accountId,
+          version: context.pluginVersion,
+          sessionId: context.sessionId,
+        }) ?? {},
+      token: context.auth?.token,
+      sessionId: context.sessionId,
+    };
+    const spec = adapter.encode(request, adapterContext);
+    if (new URL(spec.url).host !== new URL(resolved.baseUrl).host) {
+      throw new Error("a routed request named a host other than the provider's");
+    }
+
+    const transport = await transportFor();
+    const sentAt = Date.now();
+    const response: TransportResponse = await transport.send(spec, signal);
+    if (response.status < 200 || response.status >= 300) {
+      let body = "";
+      for await (const piece of response.body) body += piece;
+      throw classify(name, { kind: "http", status: response.status, headers: response.headers, body });
+    }
+
+    const parser: StreamParser = adapter.parser();
+    const gate = createGate(name, model, where.turnId, where.index);
+    const tallied: Tally = { text: "", toolUses: [], toolNames: new Map(), stop: undefined, blocks: 0 };
+    const take = (chunk: TurnStepChunk): void => {
+      tally(tallied, chunk);
+      if (chunk.kind === "tool") tracker.recordToolId(chunk.id);
+    };
+    for await (const piece of response.body) {
+      if (signal.aborted) return { tally: tallied, aborted: true, sentAt, firstAt: gate.firstAt };
+      for (const event of parser.push(piece)) {
+        for (const chunk of gate.accept(event)) {
+          take(chunk);
+          yield chunk;
+          if (where.progress !== undefined) where.progress.blocks = tallied.blocks;
+        }
+      }
+    }
+    if (signal.aborted) return { tally: tallied, aborted: true, sentAt, firstAt: gate.firstAt };
+    for (const event of parser.end()) {
+      for (const chunk of gate.accept(event)) {
+        take(chunk);
+        yield chunk;
+        if (where.progress !== undefined) where.progress.blocks = tallied.blocks;
+      }
+    }
+    gate.finish();
+    return { tally: tallied, aborted: false, sentAt, firstAt: gate.firstAt };
+  }
+
   // The answer for a failed step: its message as text, then an end of turn. The
-  // status line shows the error until a later step succeeds.
+  // status line shows the error until a later step succeeds. A subagent's failure
+  // leaves the status line as it is.
   async function* failure(
     e: TurnStepInput,
     name: string,
@@ -239,7 +372,7 @@ export function createRouter(host: RouterHost, capture: ComposeCapture): Router 
   ): AsyncGenerator<TurnStepChunk, TurnStepResult> {
     if (signal.aborted) return { turnId: e.turnId, index: e.index, answer: "", toolUses: [], stopReason: "end_turn", usage: null };
     const routed = toRouted(name, error);
-    host.ui.status(errorStatusText(e.model, name, routed.kind));
+    if (e.agentId === undefined) host.ui.status(errorStatusText(e.model, name, routed.kind));
     yield { kind: "text", index: blocks, text: routed.message };
     yield { kind: "stop", stopReason: "end_turn", usage: null };
     return { turnId: e.turnId, index: e.index, answer: routed.message, toolUses: [], stopReason: "end_turn", usage: null };
@@ -256,18 +389,8 @@ export function createRouter(host: RouterHost, capture: ComposeCapture): Router 
     const name = plugin.identity.name;
     if (!catalog.isEnabled(plugin.identity.id)) throw classify(name, { kind: "named", error: "disabled" });
 
-    const listed = catalog.models().find((model) => model.id === e.model);
-    const metadata = metadataFor(e.model);
-    const resolved: ResolvedWire =
-      listed !== undefined
-        ? { wire: listed.wire, baseUrl: listed.baseUrl }
-        : plugin.wire(parsed.model, metadata?.wire);
-    checkRequest({ provider: plugin.identity.id, model: e.model, baseUrl: resolved.baseUrl });
-
-    const auth = await credentialFor(plugin);
-    const platform = await services.platform();
-    const sessionId = await host.session.id();
-    const pluginVersion = (version ??= readPluginVersion(host.fs, host.pluginRoot()));
+    const { listed, metadata, resolved } = wireOf(plugin, e.model, parsed.model);
+    const context = await contextFor(plugin, e.model, resolved);
     const captured = capture.get(e.model);
     const system = captured?.system ?? (await systemFor(e.model));
     const listing = await host.tool.list();
@@ -293,62 +416,31 @@ export function createRouter(host: RouterHost, capture: ComposeCapture): Router 
       ...(maxOutput === undefined ? {} : { maxOutput }),
     };
 
-    const adapter = WIRE_ADAPTERS[resolved.wire];
-    const context: AdapterContext = {
-      baseUrl: resolved.baseUrl,
-      headers:
-        plugin.identity.headers?.({ platform, accountId: auth?.accountId, version: await pluginVersion, sessionId }) ?? {},
-      token: auth?.token,
-      sessionId,
-    };
-    const spec = adapter.encode(request, context);
-    if (new URL(spec.url).host !== new URL(resolved.baseUrl).host) {
-      throw new Error("a routed request named a host other than the provider's");
-    }
+    const reply = yield* send(plugin, e.model, request, resolved, context, signal, {
+      turnId: e.turnId,
+      index: e.index,
+      progress,
+    });
+    if (reply.aborted) return resultOf(e, reply.tally);
 
-    const transport = await transportFor();
-    const sentAt = Date.now();
-    const response: TransportResponse = await transport.send(spec, signal);
-    if (response.status < 200 || response.status >= 300) {
-      let body = "";
-      for await (const piece of response.body) body += piece;
-      throw classify(name, { kind: "http", status: response.status, headers: response.headers, body });
-    }
-
-    const parser: StreamParser = adapter.parser();
-    const gate = createGate(name, e.model, e.turnId, e.index);
-    const result: Tally = { text: "", toolUses: [], toolNames: new Map(), stop: undefined, blocks: 0 };
-    for await (const piece of response.body) {
-      if (signal.aborted) return resultOf(e, result);
-      for (const event of parser.push(piece)) {
-        for (const chunk of gate.accept(event)) {
-          tally(result, chunk);
-          yield chunk;
-          progress.blocks = result.blocks;
-        }
-      }
-    }
-    if (signal.aborted) return resultOf(e, result);
-    for (const event of parser.end()) {
-      for (const chunk of gate.accept(event)) {
-        tally(result, chunk);
-        yield chunk;
-        progress.blocks = result.blocks;
-      }
-    }
-    gate.finish();
-
-    host.ui.status(statusText(e.model, thinkingOf(supported, effort)));
+    // Only the main loop moves the status line; a subagent's steps leave it as it is.
+    if (e.agentId === undefined) host.ui.status(statusText(e.model, thinkingOf(supported, effort)));
+    const usage = reply.tally.stop?.usage;
+    if (usage) tracker.recordUsage(e.agentId ?? MAIN_LOOP, usage);
     await remember(
       e.model,
-      speedOf({ sentAt, firstAt: gate.firstAt, endedAt: Date.now(), outputTokens: result.stop?.usage?.output_tokens }),
+      speedOf({ sentAt: reply.sentAt, firstAt: reply.firstAt, endedAt: Date.now(), outputTokens: usage?.output_tokens }),
     );
-    return resultOf(e, result);
+    return resultOf(e, reply.tally);
   }
 
   return {
     async isRouted(model) {
       return (await providerOf(model)) !== undefined;
+    },
+
+    observe(e) {
+      tracker.recordStep(e.agentId ?? MAIN_LOOP, e.model);
     },
 
     async *answer(e, signal) {
@@ -389,6 +481,38 @@ export function createRouter(host: RouterHost, capture: ComposeCapture): Router 
         new AbortController().signal,
         progress?.blocks ?? 0,
       );
+    },
+
+    async complete(model, request, signal) {
+      const plugin = await providerOf(model);
+      if (plugin === undefined) throw classify(model, { kind: "named", error: "internal" });
+      const name = plugin.identity.name;
+      try {
+        if (!catalog.isEnabled(plugin.identity.id)) throw classify(name, { kind: "named", error: "disabled" });
+        const providerModel = parseModelId(model)?.model ?? model;
+        const { resolved } = wireOf(plugin, model, providerModel);
+        const context = await contextFor(plugin, model, resolved);
+        const stream = send(plugin, model, request, resolved, context, signal, { turnId: SUMMARY_TURN, index: 0 });
+        let text = "";
+        for (;;) {
+          const item = await stream.next();
+          if (item.done === true) return text;
+          if (item.value.kind === "text") text += item.value.text;
+        }
+      } catch (error) {
+        throw toRouted(name, error);
+      }
+    },
+
+    async describe(model) {
+      const plugin = await providerOf(model);
+      const listed = catalog.models().find((entry) => entry.id === model);
+      const metadata = metadataFor(model);
+      return {
+        provider: plugin?.identity.name ?? parseModelId(model)?.provider ?? model,
+        contextWindow: listed?.contextWindow ?? metadata?.contextWindow,
+        maxOutput: listed?.maxOutput ?? metadata?.maxOutput,
+      };
     },
   };
 }

@@ -17,13 +17,21 @@ describe("hooks wiring", () => {
   // The host needs each port's functions spelled at their call sites, so the two
   // commands share one hook rather than two copies of the same port. The routed
   // turns add the compose capture and the turn.step hook, which answers routed models.
-  it("registers the command hook, the compose capture, the turn step, the pane render and the pane close, and nothing else", () => {
+  // Routed compaction, the main-loop trigger, routed permissions and the permission
+  // mode observers are the rest.
+  it("registers the command hook, the compose capture, the turn step, the compaction and permission hooks, the pane render and the pane close, and nothing else", () => {
     const { on, calls } = recorder();
     register(on, {} as never);
     expect(calls).toEqual([
       { event: "command.run", matcher: undefined },
       { event: "prompt.compose", matcher: undefined },
       { event: "turn.step", matcher: undefined },
+      { event: "session.compact", matcher: undefined },
+      { event: "turn.complete", matcher: undefined },
+      { event: "tool.check", matcher: undefined },
+      { event: "classic.UserPromptSubmit", matcher: undefined },
+      { event: "classic.PermissionRequest", matcher: undefined },
+      { event: "classic.PostToolUse", matcher: undefined },
       { event: "ui.render", matcher: { component: "Pane", requestId: PANE_ID } },
       { event: "ui.close", matcher: { id: PANE_ID } },
     ]);

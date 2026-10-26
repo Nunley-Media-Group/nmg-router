@@ -1,5 +1,14 @@
 {
   "name": "nmg-router",
   "version": "0.6.0",
-  "description": "Puts non-Claude models into Claude Code's /model picker through the user's own provider logins, with an Anthropic guard on every routed request."
+  "description": "Puts non-Claude models into Claude Code's /model picker through the user's own provider logins, with an Anthropic guard on every routed request.",
+  "userConfig": {
+    "routedAutoPermissions": {
+      "type": "string",
+      "title": "Routed auto-mode permissions",
+      "description": "How auto mode decides tool calls from routed models",
+      "options": ["claude-classifier", "server-classifier-off"],
+      "required": true
+    }
+  }
 }

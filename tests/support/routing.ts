@@ -3,6 +3,7 @@ import { encodeSecret } from "../../src/auth/accounts.ts";
 import { createCredentialStore } from "../../src/credentials/store.ts";
 import { createComposeCapture, type ComposeCapture } from "../../src/routing/compose-capture.ts";
 import { createRouter, type Router, type RouterHost } from "../../src/routing/router.ts";
+import { createSessionTracker, type SessionTracker } from "../../src/routing/session-tracker.ts";
 import { routeStep, routeStepFailed, type StepNext } from "../../src/routing/turn-step.ts";
 import type { ApiMessageInput } from "../../src/translate/messages.ts";
 import { fakeEngine, type FakeEngine, type FakeHttpResponder, type FakeOptions } from "./fake-engine.ts";
@@ -22,10 +23,11 @@ export type Harness = {
   readonly router: Router;
   readonly capture: ComposeCapture;
   readonly messages: ApiMessageInput[];
+  readonly tracker: SessionTracker;
 };
 
 export function routerHostOf(engine: FakeEngine): RouterHost {
-  const surface = engine as unknown as Pick<RouterHost, "process" | "ui" | "session" | "prompt" | "tool"> & {
+  const surface = engine as unknown as Pick<RouterHost, "process" | "ui" | "session" | "prompt" | "tool" | "model" | "config" | "clock"> & {
     plugin: { root: string };
   };
   return {
@@ -36,6 +38,9 @@ export function routerHostOf(engine: FakeEngine): RouterHost {
     process: surface.process,
     ui: surface.ui,
     session: surface.session,
+    model: surface.model,
+    config: surface.config,
+    clock: surface.clock,
     prompt: surface.prompt,
     tool: surface.tool,
     pluginRoot: () => surface.plugin.root,
@@ -51,7 +56,8 @@ export function harness(options: Partial<FakeOptions> = {}, messages: ApiMessage
     ...options,
   });
   const capture = createComposeCapture();
-  return { engine, router: createRouter(routerHostOf(engine), capture), capture, messages };
+  const tracker = createSessionTracker();
+  return { engine, router: createRouter(routerHostOf(engine), capture, tracker), capture, messages, tracker };
 }
 
 export function userText(text: string): ApiMessageInput {
