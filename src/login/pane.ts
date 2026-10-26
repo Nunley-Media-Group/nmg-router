@@ -183,20 +183,30 @@ export function createPaneController(): PaneController {
 
   function drawSecret(elements: PaneElements, state: Pending, view: Extract<PaneView, { kind: "secret" }>): RenderElement {
     const { Box, Text, Input, Button } = elements;
+    // The host draws a person's typing or paste in an Input until the hook draws
+    // again, and the Input has no masking. So the field takes the keys inside a
+    // zero-height clip that draws none of it, and a Text shows the bullets.
+    const masked = maskOf(state.secret);
     const children: RenderChildren[] = [
       Text({ bold: true, children: view.title }),
       ...view.hint.map((line) => Text({ dimColor: true, children: line })),
-      Input({
-        key: "secret",
-        label: view.label,
-        placeholder: "Paste or type the key",
-        value: maskOf(state.secret),
-        autoFocus: true,
-        onInput: (value) => {
-          state.secret = applyInput(state.secret, value);
-          redraw(state);
-        },
-        onSubmit: () => settle({ kind: "submitted", value: state.secret }, true),
+      Text({ children: `${view.label}: ${masked === "" ? "(paste or type the key)" : masked}` }),
+      Box({
+        height: 0,
+        overflow: "hidden",
+        children: [
+          Input({
+            key: "secret",
+            label: view.label,
+            value: masked,
+            autoFocus: true,
+            onInput: (value) => {
+              state.secret = applyInput(state.secret, value);
+              redraw(state);
+            },
+            onSubmit: () => settle({ kind: "submitted", value: state.secret }, true),
+          }),
+        ],
       }),
       Button({ key: "cancel", label: "Cancel", onPress: () => settle({ kind: "cancelled" }, true) }),
     ];

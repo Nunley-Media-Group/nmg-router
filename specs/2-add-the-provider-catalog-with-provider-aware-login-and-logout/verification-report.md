@@ -1,10 +1,10 @@
 # Verification Report: Add the provider catalog with provider-aware /login and /logout
 
-**Date**: 2026-10-25
+**Date**: 2026-10-26
 **Issue**: #2
 **Reviewer**: Claude Code (nmg-sdlc verify worker)
-**Scope**: Implementation verification against spec (re-verification after fix 84f288e)
-**Verification head**: 84f288eb96d67e152792301877a4292385946638
+**Scope**: Implementation verification against spec (re-verification after fix e5a383a)
+**Verification head**: e5a383a9f76065f9cb5623d4733e247cbde49b38
 
 ---
 
@@ -16,21 +16,24 @@
 | Architecture (SOLID) | 4 |
 | Security | 3 |
 | Performance | 4 |
-| Testability | 3 |
-| Error Handling | 3 |
-| **Overall** | 3.3 |
+| Testability | 4 |
+| Error Handling | 4 |
+| **Overall** | 3.7 |
 
 ### Implementation Status: Fail
-**Total Issues**: 5 (1 critical, 1 high, 1 medium, 2 low)
+**Total Issues**: 4 (0 critical, 1 high, 2 medium, 1 low)
 
-All three registered validations pass, and so do the 235 unit tests. Fix 84f288e fixes C2. Live at 91 columns, `/login` and `/logout` now draw their picker. Fuzzy search, the masked key field, invalid-key refusal, the Anthropic hand-off and logout cancel all work.
+All three registered validations pass, and so do the 242 unit tests. Fix e5a383a works live for the three defects it targets:
 
-Two new defects block the flows live:
+- **C3 fixed**: the OpenAI Codex "Redirect URL or code" field takes the keyboard. A typed `z` and a pasted redirect URL landed in the field, not in the chat prompt. A wrong-state paste was refused, and the code never reached the transcript.
+- **H1 fixed**: a second `/login` while the Codex step was pending logged `Login cancelled.` for the old flow. The new picker stayed up and could be driven to the next step.
+- **L2 fixed**: the pane is laid out as a column, and the authorize URL wraps across the pane's full width.
 
-- **C3 (critical)**: in the OpenAI Codex OAuth step, the pane's "Redirect URL or code" field never gets keyboard focus. Typing and pasting go to Claude's chat prompt. A pasted redirect URL, which carries the authorization code, is sent to the model as a chat message. AC7 cannot be completed, and the code leaks into the transcript.
-- **H1 (high)**: a `/login` or `/logout` run while an earlier flow is still pending loses its pane. The old flow's cleanup closes the new pane, so the next step reopens it unasked and it is not placed (`The login pane could not be shown: unasked below 110 columns (91 now…)` then `Login cancelled.`).
+A new defect blocks Pass:
 
-The keychain in this session was locked (`security` exit 36), so no credential could be saved live. AC6's success path and AC8's account steps have no interactive evidence and need the user's unlocked keychain.
+- **H2 (high)**: the masked API-key field draws typed or pasted characters in plain text until the mod's redraw replaces them with bullets. A single paste of `xyz1` was read on screen as `OpenCode Go API key: xyz1`, and the next paste as `••••xyz2`, before both became bullets. A pasted provider key is therefore drawn on screen in full for a moment. This breaks AC6 ("a masked input") and FR8 ("No credential in UI text").
+
+Some AC paths still have no live evidence. AC4 (the test config file was blocked) and the success paths of AC6, AC7 and AC8 all need the user. See Remaining Issues.
 
 ---
 
@@ -47,22 +50,22 @@ The keychain in this session was locked (`security` exit 36), so no credential c
 
 ## Delivery Validation
 
-- Local verification: Not complete (interactive verification fails)
+- Local verification: Not complete (interactive verification fails on H2)
 - PR evidence: Not required
 
 ---
 
 ## Deterministic Steering Artifact and Ceiling
 
-`sdlc-verify-steering.mjs` ran at the verification head on a clean tree (run id `d71ecb44-1ddc-487b-917e-e1fc843ed3ca`). `.nmg-sdlc/verification/2.json` reports `ceiling: null` and coverage `declared: 3, recorded: 3, complete: true`.
+`sdlc-verify-steering.mjs` ran at the verification head on a clean tree (controller run id `3dae437e-cbc6-429b-b393-702530618736`). `.nmg-sdlc/verification/2.json` reports `ceiling: null` and coverage `declared: 3, recorded: 3, complete: true`.
 
 | Validation | Provider | Required | Result |
 |------------|----------|----------|--------|
 | repository.typecheck | builtin.command (`npm run typecheck`) | yes | passed |
-| repository.tests | builtin.command (`npm test`) | yes | passed (26 files, 235 tests) |
-| repository.plugin-manifest | builtin.command (`claude plugin validate .`) | yes | passed |
+| repository.tests | builtin.command (`npm test`) | yes | passed (26 files, 242 tests) |
+| repository.plugin-manifest | builtin.command (`claude plugin validate .`) | yes | passed (advisory warnings only: no icon, no install line in README) |
 
-The steering manifest declares no smoke validation. The interactive verification that `project.verification` requires fails (see below), so the status is capped at Fail.
+The steering manifest declares no smoke validation. The interactive verification that `project.verification` requires fails on H2, so the status is capped at Fail.
 
 ---
 
@@ -70,14 +73,14 @@ The steering manifest declares no smoke validation. The interactive verification
 
 | AC | Description | Status | Evidence |
 |----|-------------|--------|----------|
-| AC1 | Built-in providers | Pass | `src/providers/builtin/index.ts`; `tests/providers/builtin.test.ts`. Live: searching the picker found `OpenCode Go`, `ClinePass` and `OpenAI Codex`. xAI was hidden by `disabledProviders` |
-| AC2 | Model discovery | Pass (unit only) | `src/catalog/catalog.ts`, `src/providers/builtin/opencode-go.ts`; `tests/catalog/discovery.test.ts` |
+| AC1 | Built-in providers | Pass | `src/providers/builtin/index.ts`; `tests/providers/builtin.test.ts`. Live: the picker listed `OpenCode Go`, `ClinePass`, `OpenAI Codex` and `xAI`, and no Anthropic routed provider |
+| AC2 | Model discovery | Pass (unit only) | `src/catalog/catalog.ts`, `src/providers/builtin/opencode-go.ts`; `tests/catalog/discovery.test.ts`. A live model list needs a valid OpenCode Go key |
 | AC3 | Cache, refresh and failure states | Pass (unit only) | `src/catalog/catalog.ts`; `tests/catalog/catalog.test.ts` |
-| AC4 | Custom providers and filters | Pass | `src/config/user-config.ts`; `tests/config/user-config.test.ts`. Live: the custom `Local Test` provider was listed, xAI was hidden, and `leaky` gave `Config entry providers.leaky.apiKey looks like a credential and was ignored. Use /login to sign in to leaky.` The sentinel value was not echoed |
-| AC5 | Login picker and Anthropic | Pass | Live at 91 columns: the picker was titled "Select provider to login", with a "Type to search" field (11 rows) and rows such as `Local Test — not logged in` and `OpenAI Codex — not logged in`. Picking Anthropic opened Claude Code's own "Select login method" dialog, which was cancelled. The session stayed signed in |
-| AC6 | API-key login | **Incomplete** | Live: the masked field drew only `•••••••••••••••••`. An invalid key gave `Invalid Local Test API key; nothing was saved.`, and the mock logged `auth=other`. A valid key was validated (mock `auth=valid`), but the save hit `The macos keyring is locked; the credential for local-test was not changed.` That is correct fail-closed behaviour, but "Logged in to …" and the refresh were not shown. Unit tests pass |
-| AC7 | OAuth login and refresh | **Fail** | Live: the pane showed the authorize URL (PKCE S256, state) and the "Redirect URL or code: Paste here" field. Text typed or pasted went to Claude's chat prompt, not the field (C3), so the paste flow cannot be completed. The state check and refresh pass only in unit tests (`tests/login/oauth-code-login.test.ts`) |
-| AC8 | Accounts and logout | **Incomplete** | Live: with no stored credential, `/logout` listed only `Anthropic (Claude Code login)`, and Esc gave `Logout cancelled.` The two-account picker, `(active)` marker and delete could not be driven because the keychain was locked. Anthropic logout was not picked, so the user was not signed out. Unit tests pass (`tests/login/logout-command.test.ts`) |
+| AC4 | Custom providers and filters | Pass (unit only); live **Incomplete** | `src/config/user-config.ts`, `src/providers/custom.ts`; `tests/config/user-config.test.ts`. The auto-mode classifier blocked writing a temporary `~/Library/Application Support/nmg-router/config.json`, so this run has no live custom-provider evidence. The previous run (head 84f288e) showed it live, and that code is unchanged since |
+| AC5 | Login picker and Anthropic | Pass | Live: the picker was titled "Select provider to login" and listed 5 rows with status (`OpenCode Go — not logged in` …). There was no search field, which is correct for 10 rows or fewer. Picking Anthropic opened Claude Code's own "Select login method" dialog, which was cancelled with Esc. Fuzzy search with more than 10 rows passes in unit tests (`tests/login/pane.test.ts`) and was shown live in the previous run |
+| AC6 | API-key login | **Fail** | Live: an invalid dummy key gave `Invalid OpenCode Go API key; nothing was saved.` The field ends as bullets, but typed and pasted characters are drawn in plain text until the redraw (H2). The success path ("Logged in to OpenCode Go" and the refresh) needs the user's real key |
+| AC7 | OAuth login and refresh | Partial | Live: the pane showed the authorize URL (PKCE S256, state) and a focused paste field. A paste of `http://localhost:1455/auth/callback?code=<dummy>&state=wrong-state` gave `The pasted OpenAI Codex redirect does not match this sign-in; nothing was saved.` The dummy code is not in the transcript. A real sign-in, saved tokens, the email display and refresh need the user's own login. Refresh passes in unit tests (`tests/login/oauth-code-login.test.ts`) |
+| AC8 | Accounts and logout | Partial | Live: with nothing stored, `/logout` listed only `Anthropic (Claude Code login)`, and Esc gave `Logout cancelled.` Two Codex accounts, the `(active)` marker and the delete need two real Codex logins. Anthropic logout was not picked, because that would sign the user out. Unit tests pass (`tests/login/logout-command.test.ts`) |
 
 ---
 
@@ -86,9 +89,9 @@ The steering manifest declares no smoke validation. The interactive verification
 | Task | Description | Status | Notes |
 |------|-------------|--------|-------|
 | T001–T006 | Interfaces, HTTP, providers, auth, config, catalog | Complete | |
-| T007 | Pane controller, fuzzy filter and masked input | Complete (defects) | C3: the text step does not take focus. H1: `end()` is not tied to the `begin()` that opened the pane. L2: layout |
-| T008 | /login and /logout commands and hook wiring | Complete (defect) | `src/login/command-flow.ts`: a superseded flow's `.finally(() => pane.end())` closes the next flow's pane (H1) |
-| T009–T013 | Fakes, fixtures and tests | Complete | The fake engine models neither keyboard focus nor a second command arriving while a flow is pending |
+| T007 | Pane controller, fuzzy filter and masked input | Complete (defect) | C3, H1 and L2 are fixed. H2: the masked field echoes raw input until the redraw |
+| T008 | /login and /logout commands and hook wiring | Complete | `pane.end(hold)` closes only the flow's own hold |
+| T009–T013 | Fakes, fixtures and tests | Complete | The fake engine applies the mod's `value` at once, so it cannot show the window in which the host draws raw typing |
 
 ---
 
@@ -101,21 +104,22 @@ The steering manifest declares no smoke validation. The interactive verification
 | Single Responsibility | 4 | `command-flow.ts` owns the flow lifecycle, `pane.ts` the view. `hooks/register.ts` only wires |
 | Open/Closed | 5 | Adding a provider takes one module plus one registry entry |
 | Liskov Substitution | 4 | Custom and built-in plugins are interchangeable |
-| Interface Segregation | 4 | `FlowHost` and the `Pick<PaneController, "begin" \| "end">` are narrow |
+| Interface Segregation | 4 | `FlowHost` and `PaneHost` are narrow; `ui.focus` was added to the port only |
 | Dependency Inversion | 4 | No direct `$` use under `src/` |
 
 ### Notes
 
-- The pane controller is a module-level singleton with mutable `pending` and `held` state, shared by overlapping flows. Each flow has no ownership token for the pane, and this is the root of H1.
+- `PaneHold` gives each command an ownership token for the pane, which removes the shared-state race behind H1.
+- `focusStep` re-asks for the keyboard with one retry and swallows errors. That fits a best-effort focus.
 
 ---
 
 ## Security Assessment
 
-- [x] PKCE S256, a checked state and no listening port. Credentials stay in the keyring, and a locked keyring fails closed (confirmed live)
-- [x] Config entries that look like credentials are refused by path, without the value (confirmed live)
-- [x] The masked field draws only `•` (confirmed live)
-- [ ] **C3**: because the paste field has no focus, a person who pastes the redirect URL sends the OAuth authorization code to the model as a chat prompt. It is then kept in the transcript and sent to Anthropic. This breaks FR8's intent ("No credential in UI text, logs…")
+- [x] PKCE S256, a checked state and no listening port. A wrong-state paste is refused and nothing is saved (confirmed live)
+- [x] The OAuth paste now goes to the field, not the model (C3 fixed, confirmed live)
+- [x] An invalid key saves nothing (confirmed live)
+- [ ] **H2**: the masked field draws raw typed or pasted text until the mod redraws it as bullets. The host `InputProps` has no masking option, and its docs say "the person's typing replaces it until the hook draws another". The raw key is not written to the transcript (a check of the scrollback for the probe strings found 0 matches), but it is drawn on screen and in any screen capture or recording of that moment
 - Low (L1, carried over): the OAuth authorize URL is also written to the transcript. It holds no secret
 
 ---
@@ -123,15 +127,14 @@ The steering manifest declares no smoke validation. The interactive verification
 ## Performance Assessment
 
 - [x] `load()` makes no network call, and refresh runs per provider
-- [x] The hook opens the pane with a `$` call and answers. The 10 s budget is no longer at risk
+- [x] The hook opens the pane with a `$` call and answers, so the 10 s budget is not at risk
 
 ---
 
 ## Error Handling Assessment
 
-- C2 (the unasked pane not being drawn below 144 columns) is **fixed** for the first `/login` or `/logout` of a session.
-- M1 (an undrawn pane waiting forever) is **fixed**: an open that is not placed now logs its reason and ends the step (`Login cancelled.`).
-- **High (H1)**: `createCommandFlows().start` runs `flow(next).finally(() => pane.end())`. When a new command's `begin()` cancels the pending step of the old flow, the old flow settles and its `finally` calls `end()` *after* the new `begin()` set `held`. This clears `held` and closes the new pane. The new flow's next `open()` then calls `ui.open` outside the hook, and the host does not place it (`unasked below 110 columns (91 now, an id the person opened before)`). Live, the person had to run `/login` twice.
+- H1 is **fixed**: a superseded flow ends with `Login cancelled.` and leaves the new command's pane alone.
+- The "Working…" view keeps a focusable Cancel that marks the hold closed, so the later steps end instead of reopening an unasked pane.
 
 ---
 
@@ -139,13 +142,12 @@ The steering manifest declares no smoke validation. The interactive verification
 
 | Acceptance Criterion | Has Scenario | Has Steps | Passes |
 |---------------------|-------------|-----------|--------|
-| AC1–AC4 | Yes | Yes (Vitest) | Yes |
-| AC5 | Yes | Yes (Vitest) | Yes (unit and live) |
-| AC6, AC8 | Yes | Yes (Vitest) | Yes (unit) / Incomplete (live, keychain locked) |
-| AC7 | Yes | Yes (Vitest) | Yes (unit) / No (live) |
+| AC1–AC5 | Yes | Yes (Vitest) | Yes |
+| AC6 | Yes | Yes (Vitest) | Unit yes / live No (H2) |
+| AC7, AC8 | Yes | Yes (Vitest) | Unit yes / live partial (needs user login) |
 
-- Unit tests: 235 in 26 files, all passing.
-- Gaps: no test runs a second `start()` while a flow is pending and then checks the new flow's pane stays held and placed. The fake engine does not model keyboard focus.
+- Unit tests: 242 in 26 files, all passing. New tests cover focus and `end(hold)` ownership.
+- Gap: no test models the host drawing the raw text before `onInput` runs, so H2 passes in unit tests.
 
 ---
 
@@ -153,30 +155,23 @@ The steering manifest declares no smoke validation. The interactive verification
 
 | Field | Value |
 |-------|-------|
-| **Method** | `herdr tab create --cwd <repo> --label verify-2 --no-focus`, then `herdr agent start verify-2 --kind claude --pane <pane> -- --plugin-dir .`. Keys were sent with `herdr agent send-keys` and `herdr pane send-text`, and the screen was read with `herdr agent read` |
-| **Setup** | A temporary `~/Library/Application Support/nmg-router/config.json` held the custom API-key provider `local-test` (a mock on `127.0.0.1:18471` that accepts only the dummy key `nmgtest-valid-key`) and the credential-bearing entry `leaky` with a sentinel value. It also held six `auth: "none"` filler providers (11 picker rows) and `disabledProviders: ["xai"]`. Afterwards the config was removed, the mock stopped and the tab closed |
-| **Startup** | Claude Code v2.1.310 at a 91-column terminal. No folder-trust dialog, and no hook or plugin load errors |
-| **Environment** | `security show-keychain-info` gives `User interaction is not allowed` (exit 36) in this session, both from the worker and from a herdr shell. The login keychain is locked, and unlocking it needs the user's password |
+| **Method** | `herdr tab create --cwd <repo> --label verify-2 --no-focus`, then `herdr agent start verify-2 --kind claude --pane <pane> -- --plugin-dir .`. Keys were sent with `herdr pane send-text` and `send-keys`, and the screen was read with `herdr pane read`. The tab was closed afterwards |
+| **Startup** | Claude Code v2.1.310 at 91 columns. No folder-trust dialog, and no hook or plugin load errors |
+| **Setup** | No user config. Writing a temporary config was blocked by the auto-mode classifier. The keychain was unlocked, but no credential was saved, because only dummy keys were used |
 
 | # | Prompt / keys | Observed outcome | Excerpt |
 |---|---------------|------------------|---------|
-| 1 | `/login` | The picker is drawn at 91 columns, with search because there are 11 rows. The config problem is shown without its value | `Select provider to login  Type to search ⏎ submit Anthropic (Claude Code login) ▾ [ Cancel ]` / `Config entry providers.leaky.apiKey looks like a credential and was ignored. Use /login to sign in to leaky.` |
-| 2 | Type `local`, Enter | Fuzzy filter, then the masked key step in the same pane | `Local Test — not logged in` → `Local Test API key: Paste or type the key` |
-| 3 | Type `nmgtest-wrong-key`, Enter | Masked, validated, refused | `Local Test API key: •••••••••••••••••` / `Invalid Local Test API key; nothing was saved.` (mock: `GET /v1/models auth=other`) |
-| 4 | `/login` → Local Test → `nmgtest-valid-key` | Validated. The save was refused because the keychain is locked | mock `auth=valid` / `The macos keyring is locked; the credential for local-test was not changed.` |
-| 5 | `/logout`, Esc | Only Anthropic is listed (nothing stored), and Esc cancels | `Select provider to logout Anthropic (Claude Code login)` / `Logout cancelled.` |
-| 6 | `/login`, Enter on Anthropic, Esc | Claude Code's built-in login ran, and was cancelled | `Login … Select login method: ❯ 1. Claude account with subscription …` |
-| 7 | `/login` + `opencode`, `cline`, `codex`, `xai`, `filler`, `leaky` | Rows and status. xAI is absent (`xai` only fuzzy-matches OpenAI Codex), and `leaky` is absent | `OpenCode Go — not logged in`, `ClinePass — not logged in`, `OpenAI Codex — not logged in`, `Filler 1`, `No matching providers` |
-| 8 | `/login` → OpenAI Codex, then paste `http://localhost:1455/auth/callback?code=nmgtest-code&state=wrong-state` | The pane shows the URL and the paste field, but the paste reached the chat prompt and was sent to the model (C3) | `Log in to OpenAI Codex  Open this URL, sign in, then paste… Redirect URL or code: Paste here` / `❯ http://localhost:1455/auth/callback?code=nmgtest-code&state=wrong-state` |
-| 9 | `/login` while the step-8 flow was pending | The old flow was cancelled, and the new pane closed and could not be reopened (H1) | `Login cancelled.` / `The login pane could not be shown: unasked below 110 columns (91 now, an id the person opened before)…` / `Login cancelled.` |
-| 10 | Fresh `/login` → Codex, then type `z` | Reproduced C3 from a clean state: the field stays empty and `z` lands in the chat prompt | `Redirect URL or code: Paste here` / `❯ z` |
+| 1 | `/login` | Picker drawn as a column, with 5 rows and status | `Select provider to login` / `OpenCode Go — not logged in` / `OpenAI Codex — not logged in` / `xAI — not logged in` / `[ Cancel ]` |
+| 2 | OpenCode Go, type a dummy key after the step drew, Enter | Masked, then refused | `OpenCode Go API key: •••••••••••••••••` / `Invalid OpenCode Go API key; nothing was saved.` |
+| 3 | `/login` → OpenAI Codex, type `z` | Field has focus (C3 fixed) | `Redirect URL or code: z  ⏎ submit`; prompt `❯` empty |
+| 4 | Backspace, paste `…/auth/callback?code=<dummy>&state=wrong-state`, Enter | Refused, and the code is not in the transcript | `The pasted OpenAI Codex redirect does not match this sign-in; nothing was saved.` |
+| 5 | `/login` → Codex, Tab Tab, `/login` Enter | Old flow cancelled, new picker held (H1 fixed) | `Login cancelled.` then `Select provider to login` drawn |
+| 6 | In the new picker → OpenCode Go | The second flow reaches the key step | `Log in to OpenCode Go` / `OpenCode Go API key: •  ⏎ submit` |
+| 7 | Key step: paste `xyz1`, read at once; paste `xyz2`, read at once | Raw text drawn before the bullets (H2) | `OpenCode Go API key: xyz1` → `••••` → `••••xyz2` → `••••••••` |
+| 8 | `/login`, Enter on Anthropic, Esc | Claude Code's built-in login ran, and was cancelled | `Login … Select login method: ❯ 1. Claude account with subscription …` |
+| 9 | `/logout`, Esc | Only Anthropic is listed (nothing stored), and Esc cancels | `Select provider to logout  Anthropic (Claude Code login)` / `Logout cancelled.` |
 
-Not driven live:
-- A successful API-key save, the account picker and logout of a stored account (AC6, AC8). These need the user's keychain unlocked.
-- A real Codex OAuth sign-in. It needs the user's own login and is blocked by C3 in any case.
-- Picking Anthropic in `/logout`, which would sign the user out of Claude.
-
-Side effect: the Codex step runs `open <authorize URL>`, so each Codex attempt opened a browser tab at auth.openai.com. No sign-in was done.
+Not driven live: a successful key save and refresh, a real Codex sign-in with email, the two-account logout and the `(active)` marker. These need the user's own provider logins. Anthropic logout was not driven, because it would sign the user out of Claude. Side effect: each Codex attempt ran `open <authorize URL>` and opened an auth.openai.com browser tab. No sign-in was done.
 
 ---
 
@@ -184,31 +179,20 @@ Side effect: the Codex step runs `open <authorize URL>`, so each Codex attempt o
 
 | Severity | Category | Location | Original Issue | Fix Applied | Routing |
 |----------|----------|----------|----------------|-------------|---------|
-| — | — | — | None. The verify publication scope allows only this report, and C3 and H1 need code changes | — | — |
+| — | — | — | None. The verify publication scope allows only this report, and H2 needs a code change | — | — |
 
 ## Remaining Issues
-
-### Critical Issues
-
-| Field | Value |
-|-------|-------|
-| **Severity** | Critical |
-| **Category** | Error Handling / Security |
-| **Location** | `src/login/pane.ts` (`drawText`, held-pane `open`), `src/login/login-command.ts` (`oauthFlow`) |
-| **Issue** | C3: the OAuth "Redirect URL or code" input has no keyboard focus, and keystrokes and pastes go to Claude's chat prompt. The API-key step does receive input, so the difference is in the OAuth path. Possible causes: `oauthFlow` writes `host.ui.log(...)` and runs `open <url>` (the browser takes the terminal's focus) between the select and text steps, while the held pane shows only `Working…` with nothing focusable. Or `drawText`'s `Input` is uncontrolled (no `value`) |
-| **Impact** | AC7 cannot be completed. A person who pastes the redirect URL sends the authorization code to the model and the transcript |
-| **Reason Not Fixed** | The verify scope allows only the report. Suggested fix: re-assert focus when the text step is drawn (a focused element, or re-request focus on the held pane after `log` and `open`), make the Input controlled like the secret field, and add a fake-engine focus model with a test |
 
 ### High Priority
 
 | Field | Value |
 |-------|-------|
 | **Severity** | High |
-| **Category** | Error Handling |
-| **Location** | `src/login/command-flow.ts` (`start`: `.finally(() => pane.end())`), `src/login/pane.ts` (`begin`, `end`) |
-| **Issue** | H1: a superseded flow's `end()` closes the pane that the next command's `begin()` just opened |
-| **Impact** | Re-running `/login` or `/logout` while a step is pending fails with "could not be shown … unasked", and the person must run it again |
-| **Reason Not Fixed** | The verify scope allows only the report. Suggested fix: have `begin` return a token or generation, and let `end(token)` close only the pane it opened. Or skip `end()` when the flow was superseded. Add a test that runs two `start()` calls back to back |
+| **Category** | Security |
+| **Location** | `src/login/pane.ts` (`drawSecret`), `src/login/masked-input.ts` |
+| **Issue** | H2: the host `Input` draws the person's typing until the hook draws a new `value`. The mod redraws bullets only after `onInput` → `invalidate`, so each typed or pasted chunk is drawn in plain text for a moment |
+| **Impact** | A pasted provider key is drawn on screen in full, briefly. This breaks AC6's masked input and FR8 |
+| **Reason Not Fixed** | The verify scope allows only the report. Possible fix: register a `ui.input` hook for the `secret` element of this plugin's pane. It would record the raw text and call `next({ ...e, value: bullets })`, so the host never draws the raw value. Confirm live that the rewritten value is what gets drawn. If the host cannot hide the typing, record it as a host limit and ask for a masked `Input` option. Add a fake-engine model of the raw-echo window and a test for it |
 
 ### Medium Priority
 
@@ -217,49 +201,45 @@ Side effect: the Codex step runs `open <authorize URL>`, so each Codex attempt o
 | **Severity** | Medium |
 | **Category** | Verification evidence |
 | **Location** | Environment |
-| **Issue** | The login keychain is locked in this verification session (`security` exit 36), so AC6's success path and AC8's account steps have no live evidence |
-| **Reason Not Fixed** | Unlocking needs the user's password. The user should run these steps with an unlocked keychain, or verification should run where the keychain is unlocked |
+| **Issue** | AC4 has no live evidence in this run, because the auto-mode classifier blocked creating the temporary user config file. The success paths of AC6, AC7 and AC8 need the user's real OpenCode Go key and two Codex logins |
+| **Reason Not Fixed** | The user should allow the temporary config file, or run these steps themselves, during the next verification |
+
+| Field | Value |
+|-------|-------|
+| **Severity** | Medium |
+| **Category** | Testability |
+| **Location** | `tests/support/fake-engine.ts` |
+| **Issue** | The fake engine applies the mod's `value` at once, so it cannot catch H2 |
+| **Reason Not Fixed** | Belongs with the H2 fix |
 
 ### Low Priority
 
 | Field | Value |
 |-------|-------|
 | **Severity** | Low |
-| **Category** | Usability |
-| **Location** | `src/login/pane.ts` (`drawSelect`, `drawSecret`, `drawText`) |
-| **Issue** | L2: children of the root `Box` are laid out in a row. Title, hint, field and button sit side by side, and the OAuth URL wraps inside a 23-column cell, so it cannot be copied cleanly from the pane |
-| **Reason Not Fixed** | The verify scope allows only the report. Suggested fix: `flexDirection: "column"` on the root `Box` |
-
-| Field | Value |
-|-------|-------|
-| **Severity** | Low |
 | **Category** | Security hygiene |
 | **Location** | `src/login/login-command.ts` |
-| **Issue** | L1 (carried over): the OAuth authorize URL is also written to the transcript. It holds no secret, and while L2 stands it is the only copyable form |
-| **Reason Not Fixed** | Optional; this is a product choice |
+| **Issue** | L1 (carried over): the OAuth authorize URL is also written to the transcript. It holds no secret, and the pane now shows it cleanly, so the transcript copy can go |
+| **Reason Not Fixed** | Optional; a product choice |
 
 ---
 
 ## Positive Observations
 
-- C2 and M1 are fixed. The picker draws at 91 columns, and a pane that cannot be placed ends the step instead of hanging.
+- C3, H1 and L2 are fixed and confirmed live.
 - The Anthropic hand-off runs Claude Code's own login, and the mod stays out of it.
-- Credential hygiene holds live: the key is masked, an invalid key is not saved, the config sentinel is not echoed, and a locked keyring fails closed with no vault fallback.
+- A wrong-state OAuth paste and an invalid key save nothing, and no probe string reached the transcript.
 
 ---
 
 ## Recommendations Summary
 
 ### Before PR (Must)
-- [ ] C3: give the OAuth paste field keyboard focus, and add a focus-aware fake-engine test
-- [ ] H1: tie `end()` to the `begin()` that opened the pane, and add a test with a second command while a flow is pending
-- [ ] Re-run interactive verification for AC6–AC8 with an unlocked keychain, including a stored dummy credential and `/logout` of it
-
-### Short Term (Should)
-- [ ] L2: lay out the pane as a column so the URL and fields are readable
+- [ ] H2: stop the masked field from drawing raw input, and add a fake-engine test for it
+- [ ] Re-run interactive verification with a temporary custom-provider config (AC4) and with the user's own logins for the success paths of AC6–AC8
 
 ### Long Term (Could)
-- [ ] L1: drop the transcript copy of the OAuth URL once the pane shows it copyably
+- [ ] L1: drop the transcript copy of the OAuth URL
 
 ---
 
@@ -267,4 +247,4 @@ Side effect: the Codex step runs `open <authorize URL>`, so each Codex attempt o
 
 **Needs fixes**
 
-The C2 fix works and the picker is usable at ordinary widths. Verification is **Fail** until C3 and H1 are fixed and AC6–AC8 are shown working interactively.
+The pane is now focused, owned by its command and readable. Verification is **Fail** until the masked key field stops drawing raw input (H2), and until AC4 and the success paths of AC6–AC8 have live evidence.

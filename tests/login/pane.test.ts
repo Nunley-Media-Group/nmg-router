@@ -159,6 +159,29 @@ describe("pane secret field (AC6)", () => {
     expect(JSON.stringify(engine.recorded.ui)).not.toContain("abc");
   });
 
+  it("keeps the field in a zero-height clip, so the host's raw echo is never drawn", () => {
+    const pane = createPaneController();
+    void pane.open(fakeEngine({ platform: "linux" }), {
+      kind: "secret",
+      title: "Log in to OpenCode Go",
+      label: "OpenCode Go API key",
+      hint: [],
+    });
+    const field = () => nodesOf(pane.draw(elements), "Input").find((node) => node.props.key === "secret");
+    // The host draws a typed or pasted chunk in the field until the hook draws
+    // again, so the field itself must draw nothing.
+    field()?.props.onInput("sk-raw1");
+
+    const tree = pane.draw(elements);
+    const clip = nodesOf(tree, "Box").find((box) => nodesOf(box.props.children, "Input").length > 0 && box.props.height === 0);
+    expect(clip?.props.overflow).toBe("hidden");
+    expect(nodesOf(clip?.props.children, "Input").map((node) => node.props.key)).toEqual(["secret"]);
+    const shown = nodesOf(tree, "Text").map((node) => String(node.props.children));
+    expect(shown).toContain("OpenCode Go API key: •••••••");
+    expect(JSON.stringify(tree)).not.toContain("sk-raw1");
+    pane.closedByHost();
+  });
+
   it("resolves cancelled from the Cancel button", async () => {
     const pane = createPaneController();
     const cancelled = pane.open(fakeEngine({ platform: "linux" }), {
