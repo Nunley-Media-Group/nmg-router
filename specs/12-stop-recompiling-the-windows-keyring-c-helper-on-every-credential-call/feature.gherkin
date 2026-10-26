@@ -1,0 +1,40 @@
+**Issue**: #12
+**Date**: 2026-10-25
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/1-lay-the-mod-foundation-with-the-anthropic-guard-and-os-keyring-credentials/
+
+# File: tests/features/windows-keyring-helper-cache.feature
+# Generated from: specs/12-stop-recompiling-the-windows-keyring-c-helper-on-every-credential-call/requirements.md
+Feature: Windows keyring helper is compiled once and cached
+
+  @SCN001 @regression
+  Scenario: The first call compiles the helper and later calls reuse it
+    Given no cached helper DLL exists under "%LOCALAPPDATA%\nmg-router"
+    When a credential is saved, then read, then deleted
+    Then the save compiles "NmgRouterCredential-<hash>.dll" into that directory
+    And the read and delete load the cached DLL without compiling
+
+  @SCN002 @regression
+  Scenario: A changed helper source gets a new DLL
+    Given a cached helper DLL named for an earlier C# source
+    When a credential call runs with the current source
+    Then the call compiles and loads a DLL named for the current source's hash
+
+  @SCN003 @regression
+  Scenario: An empty or unloadable cached DLL is rebuilt
+    Given the cached DLL with the current name is empty or holds garbage bytes
+    When a credential call runs
+    Then the call succeeds, recompiles the helper and replaces the DLL with a loadable one
+
+  @SCN004 @regression
+  Scenario: No cache directory falls back to compiling in memory
+    Given "LOCALAPPDATA" is unset, or its directory cannot be created
+    When a credential call runs
+    Then the helper is compiled in memory and the call succeeds
+
+  @SCN005 @regression
+  Scenario: Stored credentials and error behavior are unchanged
+    Given a credential saved under target "nmg-router:opencode-go/default"
+    When it is read and deleted after the fix, and an unknown account is read
+    Then the credential is found under the same target, the unknown read reports not found, a failing Credential Manager raises "keyring_failed", and the secret never appears in argv, the environment, the DLL path or the DLL
