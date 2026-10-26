@@ -4,7 +4,8 @@ import { createPermissionModeTracker, type PermissionModeTracker } from "../../s
 import type { PermissionMode } from "../../src/permissions/mode.ts";
 import { routeStep } from "../../src/routing/turn-step.ts";
 import { CHAT_URL, chatTurn, collect, harness, postsTo, remember, replies, signIn, spyNext, step } from "../support/routing.ts";
-import { toolCall, toolNext } from "../support/fake-turn.ts";
+import { autoModeOutcome, toolCall, toolNext } from "../support/fake-turn.ts";
+import { ALLOWED, NOT_ALLOWED, createPersonApproval } from "../../src/permissions/person-approval.ts";
 import type { FakeOptions } from "../support/fake-engine.ts";
 
 // The id a routed step emitted for the call under test.
@@ -21,19 +22,21 @@ function autoFixture(options: Partial<FakeOptions> = {}, policy: PermissionMode 
     mode: permissions,
     readMode: async () => policy,
     host: h.engine,
+    askPerson: createPersonApproval(),
   };
   return { h, permissions, deps };
 }
 
 // AC5: in claude-classifier mode, a routed call that no rule settles gets the classifier's verdict.
 describe("the Claude classifier decides a routed call", () => {
-  it.each<["allow" | "ask" | "deny"]>([["allow"], ["ask"], ["deny"]])("returns the classifier's %s", async (label) => {
-    const { h, deps } = autoFixture({ classify: label });
+  it.each<["allow" | "deny"]>([["allow"], ["deny"]])("returns the classifier's %s, and asks nobody", async (label) => {
+    const { h, deps } = autoFixture({ classify: label, ask: "Allow" });
 
     const verdict = await checkRoutedTool(deps, toolCall({ tool_use_id: ROUTED_CALL }), toolNext({ decision: "ask", reason: "core" }));
 
     expect(verdict).toEqual({ decision: label, reason: "nmg-router: Claude classifier verdict for a routed call" });
     expect(h.engine.recorded.classifications).toEqual([{ text: expect.any(String), labels: ["allow", "ask", "deny"] }]);
+    expect(h.engine.recorded.asks).toEqual([]);
   });
 
   it("classifies on the tool, its input and the working directory", async () => {
@@ -47,13 +50,14 @@ describe("the Claude classifier decides a routed call", () => {
     expect(classified?.text).toContain("Working directory: /work/notes");
   });
 
-  it("asks the person when the classification is rejected or names no label", async () => {
-    for (const classify of [new Error("classifier unavailable"), undefined]) {
-      const { deps } = autoFixture({ classify });
+  it("puts an ask label, a rejected classification or no label to the person", async () => {
+    for (const classify of ["ask", new Error("classifier unavailable"), undefined]) {
+      const { h, deps } = autoFixture({ classify, ask: "Allow" });
 
       const verdict = await checkRoutedTool(deps, toolCall({ tool_use_id: ROUTED_CALL }), toolNext({ decision: "ask" }));
 
-      expect(verdict).toEqual({ decision: "ask", reason: "nmg-router: classifier gave no verdict" });
+      expect(verdict).toEqual(ALLOWED);
+      expect(h.engine.recorded.asks).toHaveLength(1);
     }
   });
 
@@ -72,18 +76,49 @@ describe("the Claude classifier decides a routed call", () => {
   });
 });
 
-// AC6: server-classifier-off asks the person, with a reason that names nmg-router.
+// AC6, SCN006: server-classifier-off puts the call to the person, and asks no classifier.
 describe("the server classifier off", () => {
-  it("answers ask with an nmg-router reason, and asks no classifier", async () => {
-    const { h, deps } = autoFixture({ classify: "allow" }, "server-classifier-off");
+  it.each<[string, string | Error, typeof ALLOWED, string]>([
+    ["Allow", "Allow", ALLOWED, "runs"],
+    ["Deny", "Deny", NOT_ALLOWED, "refused"],
+    ["a dismissed question", new Error("dismissed"), NOT_ALLOWED, "refused"],
+  ])("answers %s as allow or deny, so no server classifier verdict is needed", async (_label, ask, expected, outcome) => {
+    const { h, deps } = autoFixture({ classify: "allow", ask }, "server-classifier-off");
+    h.tracker.recordStep("main", "opencode-go/glm-5.1");
 
     const verdict = await checkRoutedTool(deps, toolCall({ tool_use_id: ROUTED_CALL }), toolNext({ decision: "ask" }));
 
-    expect(verdict).toEqual({
-      decision: "ask",
-      reason: "nmg-router: routed call; the server classifier does not judge routed models",
-    });
+    expect(verdict).toEqual(expected);
+    expect(autoModeOutcome(verdict)).toBe(outcome);
     expect(h.engine.recorded.classifications).toEqual([]);
+    expect(h.engine.recorded.asks).toEqual([
+      {
+        question: "opencode-go/glm-5.1 wants to run Bash: git status. Allow it?",
+        options: { header: "nmg-router", options: ["Allow", "Deny"] },
+      },
+    ]);
+  });
+
+  it("names a subagent's own model in the question", async () => {
+    const { h, deps } = autoFixture({ ask: "Allow" }, "server-classifier-off");
+    h.tracker.recordStep("agent-1", "opencode-go/glm-5.3");
+
+    await checkRoutedTool(deps, toolCall({ tool_use_id: ROUTED_CALL, agentId: "agent-1" }), toolNext({ decision: "ask" }));
+
+    expect(h.engine.recorded.asks[0]?.question).toMatch(/^opencode-go\/glm-5\.3 wants to run Bash/);
+  });
+
+  it("never leaves a routed auto-mode call as ask, in either mode, whoever approves", async () => {
+    for (const policy of ["claude-classifier", "server-classifier-off"] as const) {
+      for (const approver of ["person", "host", undefined] as const) {
+        const { deps } = autoFixture({ classify: undefined, ask: new Error("dismissed") }, policy);
+
+        const verdict = await checkRoutedTool(deps, toolCall({ tool_use_id: ROUTED_CALL, approver }), toolNext({ decision: "ask" }));
+
+        expect(verdict.decision).not.toBe("ask");
+        expect(autoModeOutcome(verdict)).not.toBe("refused by the classifier");
+      }
+    }
   });
 });
 
@@ -136,13 +171,13 @@ describe("the permission mode", () => {
   });
 });
 
-// The `.catch` path asks the person about a routed call in auto mode, and leaves every other call alone.
+// The `.catch` path refuses a routed call in auto mode, and leaves every other call alone.
 describe("a failed check", () => {
-  it("asks the person for a routed call in auto mode", () => {
+  it("denies a routed call in auto mode", () => {
     const { deps } = autoFixture();
 
     expect(checkFailed(deps, toolCall({ tool_use_id: ROUTED_CALL }))).toEqual({
-      decision: "ask",
+      decision: "deny",
       reason: "nmg-router: permission check failed",
     });
   });

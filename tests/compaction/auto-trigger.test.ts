@@ -1,35 +1,66 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createAutoTrigger, type TriggerDeps } from "../../src/compaction/auto-trigger.ts";
 import { shouldCompact, thresholdTokens } from "../../src/compaction/threshold.ts";
-import { MAIN_LOOP, createSessionTracker } from "../../src/routing/session-tracker.ts";
+import { MAIN_LOOP } from "../../src/routing/session-tracker.ts";
+import type { ApiMessageInput } from "../../src/translate/messages.ts";
+import { CHAT_URL, MODEL, chatTurn, harness, postsTo, signIn, userText, type Harness } from "../support/routing.ts";
+import type { FakeHttpResponder } from "../support/fake-engine.ts";
 import { usageOf } from "../support/fake-turn.ts";
 
-const ROUTED = "opencode-go/glm-5.1";
 const WINDOW = 128000;
 
-// Waits for the callbacks the fake clock scheduled.
+// Waits for the callbacks the fake clock scheduled and the summary they start.
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
-function triggerFixture(overrides: Partial<TriggerDeps> = {}) {
-  const tracker = createSessionTracker();
-  const compacts: number[] = [];
-  const delays: number[] = [];
-  const debug: string[] = [];
-  const deps: TriggerDeps = {
-    tracker,
-    contextWindow: async () => WINDOW,
-    after: (ms, fn) => {
-      delays.push(ms);
-      setTimeout(fn, 0);
-    },
-    compact: async () => {
-      compacts.push(compacts.length);
-      return { messages: [] };
-    },
-    debug: (text) => debug.push(text),
+function assistantText(text: string): ApiMessageInput {
+  return { role: "assistant", content: [{ type: "text", text }] };
+}
+
+// Trigger deps over a harness, as hooks/register.ts builds them, with a 128000-token window.
+function triggerDeps(h: Harness, overrides: Partial<TriggerDeps> = {}): TriggerDeps & { readonly logs: string[]; readonly debugLogs: string[] } {
+  const logs: string[] = [];
+  const debugLogs: string[] = [];
+  return {
+    tracker: h.tracker,
+    view: h.view,
+    describe: async (model) => ({ ...(await h.router.describe(model)), contextWindow: WINDOW }),
+    complete: (model, request, signal) => h.router.complete(model, request, signal),
+    messages: () => h.engine.session.messages({ as: "api" }),
+    after: (ms, fn) => h.engine.clock.after(ms, fn),
+    log: (text) => logs.push(text),
+    debug: (text) => debugLogs.push(text),
+    logs,
+    debugLogs,
     ...overrides,
   };
-  return { tracker, deps, compacts, delays, debug };
+}
+
+// Every summarization request the provider received, as its body text.
+function summaryBodies(h: Harness): string[] {
+  return postsTo(h.engine, CHAT_URL)
+    .map((request) => request.body ?? "")
+    .filter((body) => body.includes("<conversation>"));
+}
+
+// A routed main loop at the given context, on a transcript of the given messages.
+async function routedAt(tokens: number, messages: ApiMessageInput[], http: FakeHttpResponder): Promise<Harness> {
+  const h = harness({ http }, messages);
+  await signIn(h.engine);
+  h.tracker.recordStep(MAIN_LOOP, MODEL);
+  h.tracker.recordUsage(MAIN_LOOP, usageOf(tokens));
+  return h;
+}
+
+// Answers each chat request with the next reply in order.
+function queue(...texts: string[]): FakeHttpResponder {
+  const left = [...texts];
+  return (request) => {
+    if (request.url !== CHAT_URL) return undefined;
+    const text = left.shift();
+    return text === undefined ? undefined : { status: 200, text };
+  };
 }
 
 // AC2: the threshold is the window less the larger of 15% and 16384 tokens.
@@ -44,80 +75,164 @@ describe("the compaction threshold", () => {
   });
 });
 
-// AC2: a main-loop turn that ends at the threshold starts compaction, and one below it does nothing.
-describe("the main-loop trigger", () => {
-  it("schedules a compaction when a routed turn ends at the threshold", async () => {
-    const { tracker, deps, compacts, delays } = triggerFixture();
-    tracker.recordStep(MAIN_LOOP, ROUTED);
-    tracker.recordUsage(MAIN_LOOP, usageOf(108800));
+// AC2, SCN002: a main-loop turn at the threshold summarizes in place on the provider.
+describe("the in-place summary", () => {
+  it("summarizes on the provider when a turn ends at 108800, and never starts a Claude Code compaction", async () => {
+    const transcript = [userText("Plan the notes change"), assistantText("Here is the plan.")];
+    const h = await routedAt(108800, transcript, queue(chatTurn({ text: "Plan summary." })));
+    const deps = triggerDeps(h);
 
     await createAutoTrigger(deps).onTurnComplete();
     await tick();
 
-    expect(delays).toEqual([0]);
-    expect(compacts).toHaveLength(1);
+    const bodies = summaryBodies(h);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain("[User]: Plan the notes change");
+    expect(h.view.get(MAIN_LOOP)).toEqual({ summary: "Plan summary.", model: MODEL, cut: 2 });
+    expect(h.tracker.contextTokens(MAIN_LOOP)).toBe(0);
+    expect(h.engine.recorded.compacts).toEqual([]);
+    expect(h.engine.recorded.coreSummaries).toBe(0);
+    expect(h.engine.recorded.http.every((call) => !call.url.includes("anthropic"))).toBe(true);
   });
 
-  it("does nothing when the routed turn ends one token below the threshold", async () => {
-    const { tracker, deps, compacts, delays } = triggerFixture();
-    tracker.recordStep(MAIN_LOOP, ROUTED);
-    tracker.recordUsage(MAIN_LOOP, usageOf(108799));
+  it("does nothing when the turn ends one token below the threshold", async () => {
+    const h = await routedAt(108799, [userText("Hi")], queue(chatTurn({ text: "unused" })));
+
+    await createAutoTrigger(triggerDeps(h)).onTurnComplete();
+    await tick();
+
+    expect(h.engine.recorded.http).toEqual([]);
+    expect(h.view.get(MAIN_LOOP)).toBeUndefined();
+  });
+
+  it("does nothing for a model with no known window, whose window the engine already handles", async () => {
+    const h = await routedAt(500000, [userText("Hi")], queue());
+    const deps = triggerDeps(h, { describe: async () => ({ provider: "Anthropic", contextWindow: undefined, maxOutput: undefined }) });
+    h.tracker.recordStep(MAIN_LOOP, "claude-sonnet-5-5");
 
     await createAutoTrigger(deps).onTurnComplete();
     await tick();
 
-    expect(delays).toEqual([]);
-    expect(compacts).toEqual([]);
+    expect(h.engine.recorded.http).toEqual([]);
   });
 
-  it("does nothing for a Claude model, whose window the engine already handles", async () => {
-    const { tracker, deps, delays } = triggerFixture({ contextWindow: async () => undefined });
-    tracker.recordStep(MAIN_LOOP, "claude-sonnet-5-5");
-    tracker.recordUsage(MAIN_LOOP, usageOf(500000));
+  it("sends the next routed request with the summary first and only the messages after the cut", async () => {
+    const transcript = [userText("Old question"), assistantText("Old answer.")];
+    const h = await routedAt(120000, transcript, queue(chatTurn({ text: "Earlier work." }), chatTurn({ text: "Next." })));
+    await createAutoTrigger(triggerDeps(h)).onTurnComplete();
+    await tick();
+    transcript.push(userText("New question"));
 
-    await createAutoTrigger(deps).onTurnComplete();
+    const turns = h.view.apply(MAIN_LOOP, transcript);
 
-    expect(delays).toEqual([]);
+    expect(turns).toHaveLength(1);
+    const text = JSON.stringify(turns);
+    expect(text).toContain("<summary>\\nEarlier work.\\n</summary>");
+    expect(text).toContain("New question");
+    expect(text).not.toContain("Old question");
+    expect(turns[0]?.content[0]).toEqual({ type: "text", text: expect.stringContaining("compacted by opencode-go/kimi-k3.1-pro") });
   });
 
-  it("starts one compaction at a time, and retries at the next turn end after a rejected start", async () => {
-    let fail = true;
-    const attempts: number[] = [];
-    const { tracker, deps, debug, delays } = triggerFixture({
-      compact: async () => {
-        attempts.push(attempts.length);
-        if (fail) throw new Error("a turn is running");
-        return { messages: [] };
+  it("carries the earlier summary as prior at a second crossing, and summarizes only the newer messages", async () => {
+    const transcript = [userText("First task"), assistantText("First done.")];
+    const h = await routedAt(120000, transcript, queue(chatTurn({ text: "Summary one." }), chatTurn({ text: "Summary two." })));
+    const trigger = createAutoTrigger(triggerDeps(h));
+    await trigger.onTurnComplete();
+    await tick();
+    transcript.push(userText("Second task"), assistantText("Second done."));
+    h.tracker.recordUsage(MAIN_LOOP, usageOf(120000));
+
+    await trigger.onTurnComplete();
+    await tick();
+
+    const second = summaryBodies(h)[1] ?? "";
+    expect(second).toContain("[Earlier summary]: Summary one.");
+    expect(second).toContain("[User]: Second task");
+    expect(second).not.toContain("First task");
+    expect(h.view.get(MAIN_LOOP)).toEqual({ summary: "Summary two.", model: MODEL, cut: 4 });
+  });
+
+  it("starts one summary at a time", async () => {
+    const h = await routedAt(120000, [userText("Hi")], queue(chatTurn({ text: "One." }), chatTurn({ text: "Two." })));
+    const trigger = createAutoTrigger(triggerDeps(h));
+
+    await trigger.onTurnComplete();
+    await trigger.onTurnComplete();
+    await tick();
+
+    expect(summaryBodies(h)).toHaveLength(1);
+  });
+
+  it("never throws, and logs once to debug, when the window cannot be read", async () => {
+    const h = await routedAt(120000, [userText("Hi")], queue());
+    const deps = triggerDeps(h, {
+      describe: async () => {
+        throw new Error("catalog unavailable");
       },
     });
-    tracker.recordStep(MAIN_LOOP, ROUTED);
-    tracker.recordUsage(MAIN_LOOP, usageOf(120000));
+
+    await expect(createAutoTrigger(deps).onTurnComplete()).resolves.toBeUndefined();
+    expect(deps.debugLogs).toEqual(["nmg-router could not check the context threshold."]);
+    expect(h.engine.recorded.http).toEqual([]);
+  });
+});
+
+// AC8, SCN008: a failed in-place summary leaves the view, names the provider, and retries at the next turn end.
+describe("a failed in-place summary", () => {
+  it.each<[string, FakeHttpResponder, string]>([
+    ["a 500", (request) => (request.url === CHAT_URL ? { status: 500, text: "{}" } : undefined), "server_error"],
+    ["a network failure", () => undefined, "network"],
+    ["an empty summary", queue(chatTurn({ text: "" })), "malformed"],
+  ])("logs one line naming OpenCode Go for %s and leaves the view unchanged", async (_label, http, kind) => {
+    const h = await routedAt(120000, [userText("Hi")], http);
+    h.view.set(MAIN_LOOP, { summary: "Kept.", model: MODEL, cut: 0 });
+    const deps = triggerDeps(h);
+
+    await createAutoTrigger(deps).onTurnComplete();
+    await tick();
+
+    expect(deps.logs).toEqual([`OpenCode Go could not summarize this conversation (${kind}); it will be retried at the next turn end.`]);
+    expect(h.view.get(MAIN_LOOP)).toEqual({ summary: "Kept.", model: MODEL, cut: 0 });
+    expect(h.tracker.contextTokens(MAIN_LOOP)).toBe(120000);
+    expect(h.engine.recorded.compacts).toEqual([]);
+    expect(h.engine.recorded.coreSummaries).toBe(0);
+    expect(h.engine.recorded.http.every((call) => !call.url.includes("anthropic"))).toBe(true);
+  });
+
+  it("retries at the next turn end and then keeps the summary", async () => {
+    let fail = true;
+    const h = await routedAt(120000, [userText("Hi")], (request) => {
+      if (request.url !== CHAT_URL) return undefined;
+      return fail ? { status: 500, text: "{}" } : { status: 200, text: chatTurn({ text: "Second try." }) };
+    });
+    const deps = triggerDeps(h);
     const trigger = createAutoTrigger(deps);
 
     await trigger.onTurnComplete();
-    await trigger.onTurnComplete();
     await tick();
-    expect(attempts).toHaveLength(1);
-    expect(debug).toEqual(["nmg-router could not start compaction; it will be retried at the next turn end."]);
+    expect(deps.logs).toHaveLength(1);
+    expect(h.view.get(MAIN_LOOP)).toBeUndefined();
 
     fail = false;
     await trigger.onTurnComplete();
     await tick();
-    expect(attempts).toHaveLength(2);
-    expect(delays).toEqual([0, 0]);
+    expect(h.view.get(MAIN_LOOP)?.summary).toBe("Second try.");
+    expect(deps.logs).toHaveLength(1);
   });
+});
 
-  it("never throws, and logs once, when the window cannot be read", async () => {
-    const { tracker, deps, debug, delays } = triggerFixture({
-      contextWindow: async () => {
-        throw new Error("catalog unavailable");
-      },
-    });
-    tracker.recordStep(MAIN_LOOP, ROUTED);
-    tracker.recordUsage(MAIN_LOOP, usageOf(120000));
-
-    await expect(createAutoTrigger(deps).onTurnComplete()).resolves.toBeUndefined();
-    expect(delays).toEqual([]);
-    expect(debug).toEqual(["nmg-router could not check the context threshold."]);
+// AC2, FR2: the mod never starts a Claude Code compaction, so no source file calls `$.session.compact()`.
+describe("the mod's sources", () => {
+  it("never call session.compact()", () => {
+    const files = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+        entry.isDirectory() ? files(join(dir, entry.name)) : entry.name.endsWith(".ts") ? [join(dir, entry.name)] : [],
+      );
+    const callers = [...files("src"), "hooks/register.ts"].filter((path) =>
+      readFileSync(path, "utf8")
+        .split("\n")
+        .some((line) => !line.trim().startsWith("//") && /session\.compact\(/.test(line)),
+    );
+    expect(callers).toEqual([]);
   });
 });

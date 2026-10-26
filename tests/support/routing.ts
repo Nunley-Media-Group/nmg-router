@@ -1,5 +1,6 @@
 import type { PromptComposeResult, TurnStepChunk, TurnStepInput, TurnStepResult } from "claude-code";
 import { encodeSecret } from "../../src/auth/accounts.ts";
+import { createRoutedView, type RoutedView } from "../../src/compaction/routed-view.ts";
 import { createCredentialStore } from "../../src/credentials/store.ts";
 import { createComposeCapture, type ComposeCapture } from "../../src/routing/compose-capture.ts";
 import { createRouter, type Router, type RouterHost } from "../../src/routing/router.ts";
@@ -24,6 +25,7 @@ export type Harness = {
   readonly capture: ComposeCapture;
   readonly messages: ApiMessageInput[];
   readonly tracker: SessionTracker;
+  readonly view: RoutedView;
 };
 
 export function routerHostOf(engine: FakeEngine): RouterHost {
@@ -57,7 +59,8 @@ export function harness(options: Partial<FakeOptions> = {}, messages: ApiMessage
   });
   const capture = createComposeCapture();
   const tracker = createSessionTracker();
-  return { engine, router: createRouter(routerHostOf(engine), capture, tracker), capture, messages, tracker };
+  const view = createRoutedView();
+  return { engine, router: createRouter(routerHostOf(engine), capture, tracker, view), capture, messages, tracker, view };
 }
 
 export function userText(text: string): ApiMessageInput {

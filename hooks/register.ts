@@ -1,10 +1,12 @@
 import type { EngineInterface, Register } from "claude-code";
 import { createAutoTrigger, type AutoTrigger, type TriggerDeps } from "../src/compaction/auto-trigger.ts";
 import { compactFailure, compactSession, type CompactDeps } from "../src/compaction/compact-hook.ts";
+import { createRoutedView } from "../src/compaction/routed-view.ts";
 import { createCommandFlows, type FlowHost } from "../src/login/command-flow.ts";
 import { handleLogin } from "../src/login/login-command.ts";
 import { handleLogout } from "../src/login/logout-command.ts";
 import { createPaneController, PANE_ID } from "../src/login/pane.ts";
+import { createPersonApproval } from "../src/permissions/person-approval.ts";
 import { createPermissionModeTracker } from "../src/permissions/permission-mode.ts";
 import { createModeReader, type PermissionMode } from "../src/permissions/mode.ts";
 import { checkFailed, checkRoutedTool, type ToolCheckDeps } from "../src/permissions/tool-check.ts";
@@ -119,6 +121,7 @@ function hostPort($: EngineInterface): RouterHost {
       focus: (args) => $.ui.focus(args),
       invalidate: (event) => $.ui.invalidate(event),
       status: (text) => $.ui.status(text),
+      ask: (question, options) => $.ui.ask(question, options),
     },
     session: {
       id: () => $.session.id(),
@@ -126,7 +129,6 @@ function hostPort($: EngineInterface): RouterHost {
       model: () => $.session.model(),
       cwd: () => $.session.cwd(),
       authorize: () => $.session.authorize(),
-      compact: () => $.session.compact(),
     },
     model: { classify: (text, labels) => $.model.classify(text, labels) },
     config: { list: () => $.config.list() },
@@ -144,22 +146,29 @@ export const register: Register = (on, options) => {
   const tracker = createSessionTracker();
   const permissionMode = createPermissionModeTracker();
   const readMode = createModeReader(options);
+  const view = createRoutedView();
+  const askPerson = createPersonApproval();
   let router: Router | undefined;
   let trigger: AutoTrigger | undefined;
 
   // The router and the compaction and permission deps share one host, the first one
   // a hook built, as the router always has. They take a port, never `$`.
-  const routerFor = (host: RouterHost): Router => (router ??= createRouter(host, capture, tracker));
+  const routerFor = (host: RouterHost): Router => (router ??= createRouter(host, capture, tracker, view));
   const compactDeps = (host: RouterHost): CompactDeps => ({
     router: routerFor(host),
     tracker,
     selectedModel: () => host.session.model(),
+    view,
+    messages: () => host.session.messages({}),
   });
   const triggerDeps = (host: RouterHost): TriggerDeps => ({
     tracker,
-    contextWindow: async (model) => (await routerFor(host).describe(model)).contextWindow,
+    view,
+    describe: (model) => routerFor(host).describe(model),
+    complete: (model, request, signal) => routerFor(host).complete(model, request, signal),
+    messages: () => host.session.messages({}),
     after: (ms, fn) => host.clock.after(ms, fn),
-    compact: () => host.session.compact(),
+    log: (text) => host.ui.log(text),
     debug: (text) => host.ui.log(text, { to: "debug" }),
   });
   const toolCheckDeps = (host: RouterHost): ToolCheckDeps => ({
@@ -167,6 +176,7 @@ export const register: Register = (on, options) => {
     mode: permissionMode,
     readMode: (): Promise<PermissionMode> => readMode(host),
     host,
+    askPerson,
   });
 
   on("command.run", ($, e, next) => {
@@ -217,7 +227,7 @@ export const register: Register = (on, options) => {
     compactFailure(compactDeps(hostPort($)), e),
   );
 
-  // After a main-loop turn, the mod's own threshold starts compaction of a routed session.
+  // After a main-loop turn, the mod's own threshold summarizes a routed session in place, for the provider.
   on("turn.complete", async ($, e, next) => {
     if (e.agentId === undefined) {
       const host = hostPort($);
@@ -227,7 +237,7 @@ export const register: Register = (on, options) => {
     return next(e);
   });
 
-  // A routed call in auto mode is decided by the routed permission policy, unless Claude Code's own check settled it.
+  // A routed call in auto mode is decided by the routed permission policy, or put to the person, unless Claude Code's own check settled it.
   on("tool.check", ($, e, next) => checkRoutedTool(toolCheckDeps(hostPort($)), e, next)).catch((_, e) =>
     checkFailed({ tracker, mode: permissionMode }, e),
   );

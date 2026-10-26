@@ -40,8 +40,13 @@ export type FakeOptions = {
   readonly classify?: string | undefined | Error;
   // The rows `$.config.list()` answers, as the menu would draw them.
   readonly config?: readonly { readonly key: string; readonly value: unknown }[];
-  // What `$.session.compact()` answers. Undefined means `{ messages: [] }`.
+  // What `$.session.compact()` answers. Undefined means `{ messages: [] }`. As on
+  // 2.1.310, the call skips the calling plugin's own `session.compact` hook and
+  // runs core's summarizer, which `recorded.coreSummaries` counts.
   readonly compact?: unknown;
+  // What `$.ui.ask` answers: a label, an Error it rejects with (a dismissed
+  // dialog, or nobody to ask), or a function of the question giving either.
+  readonly ask?: string | Error | ((question: string) => string | Error | Promise<string | Error>);
   readonly compose?: PromptComposeResult;
   readonly tools?: readonly ToolInfo[];
   // The plugin's directory. Its manifest is read from `files`.
@@ -104,6 +109,9 @@ export type Recorded = {
   readonly classifications: { readonly text: string; readonly labels: readonly string[] }[];
   readonly timers: number[];
   authorizes: number;
+  coreSummaries: number;
+  // Each `$.ui.ask` call's question and options, in the order asked.
+  readonly asks: { readonly question: string; readonly options: unknown }[];
 };
 
 export type FakeEngine = Pick<
@@ -164,6 +172,8 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     classifications: [],
     timers: [],
     authorizes: 0,
+    coreSummaries: 0,
+    asks: [],
   };
   const env: Record<string, string | undefined> = { ...defaultEnv(options.platform), ...options.env };
   const files = new Map<string, string>(Object.entries(options.files ?? {}));
@@ -314,6 +324,7 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       },
       compact: async (input?: SessionCompactArgs) => {
         recorded.compacts.push(input);
+        recorded.coreSummaries += 1;
         return options.compact ?? { messages: [] };
       },
     },
@@ -378,6 +389,13 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
         return {};
       },
       invalidate: () => undefined,
+      ask: async (question: string, askOptions?: unknown) => {
+        recorded.asks.push({ question, options: askOptions });
+        const answer = typeof options.ask === "function" ? await options.ask(question) : options.ask;
+        if (answer === undefined) throw new Error("fake engine: nobody to ask");
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
     },
     telemetry: {
       log: async (entry: unknown) => {

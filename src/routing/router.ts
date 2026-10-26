@@ -19,7 +19,8 @@ import { parseModelId } from "../models/model-id.ts";
 import { metadataFor } from "../providers/metadata.ts";
 import type { Auth, ProviderPlugin, ResolvedWire } from "../providers/types.ts";
 import { createServices } from "../services.ts";
-import { offeredTools } from "../tools/offered-tools.ts";
+import { createRoutedView, type RoutedView } from "../compaction/routed-view.ts";
+import { offeredToolNames, offeredTools } from "../tools/offered-tools.ts";
 import { WIRE_ADAPTERS } from "../translate/adapters/index.ts";
 import { createChunkMapper } from "../translate/chunks.ts";
 import { normalizeMessages, type ApiMessageInput } from "../translate/messages.ts";
@@ -36,11 +37,15 @@ import { errorStatusText, statusText, thinkingOf } from "./status.ts";
 // Answers a routed model's turn step through the provider's wire. It sends one
 // request, streams the reply back as engine chunks, and answers any failure with
 // its message. It never calls `next`, so no step reaches Claude. `complete` sends
-// the same guarded request outside a turn and returns the reply's text.
+// the same guarded request outside a turn and returns the reply's text. A routed
+// main-loop step sends the in-place summary's view of the transcript.
 
 // The host calls the router makes. Each one is written literally in hooks/register.ts.
 export type RouterHost = HostPort & {
-  readonly ui: HostPort["ui"] & { status(text: string | undefined): void };
+  readonly ui: HostPort["ui"] & {
+    status(text: string | undefined): void;
+    ask(question: string, options: { readonly header: string; readonly options: readonly string[] }): Promise<string>;
+  };
   readonly process: HostPort["process"] & {
     spawn(request: ProcessSpawnRequest): HookStream<ProcessSpawnChunk, ProcessSpawnResult>;
   };
@@ -52,7 +57,6 @@ export type RouterHost = HostPort & {
     cwd(): Promise<string>;
     // Resolves an opaque handle or null. The mod reads only whether it is null.
     authorize(): Promise<unknown>;
-    compact(): Promise<unknown>;
   };
   readonly model: { classify(text: string, labels: readonly string[]): Promise<string | undefined> };
   readonly config: { list(): Promise<readonly { readonly key: string; readonly value: unknown }[]> };
@@ -224,7 +228,25 @@ type Reply = {
   readonly firstAt: number | undefined;
 };
 
-export function createRouter(host: RouterHost, capture: ComposeCapture, tracker: SessionTracker = createSessionTracker()): Router {
+// Waits for the loop's pending in-place summary, or until the step is abandoned.
+function settled(pending: Promise<void> | undefined, signal: AbortSignal): Promise<void> | undefined {
+  if (pending === undefined || signal.aborted) return undefined;
+  return new Promise((resolve) => {
+    const done = (): void => {
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    signal.addEventListener("abort", done, { once: true });
+    void pending.then(done);
+  });
+}
+
+export function createRouter(
+  host: RouterHost,
+  capture: ComposeCapture,
+  tracker: SessionTracker = createSessionTracker(),
+  view: RoutedView = createRoutedView(),
+): Router {
   const services = createServices(host);
   const { catalog, credentials } = services;
   const transportFor = createTransportSelector({
@@ -394,11 +416,15 @@ export function createRouter(host: RouterHost, capture: ComposeCapture, tracker:
     const captured = capture.get(e.model);
     const system = captured?.system ?? (await systemFor(e.model));
     const listing = await host.tool.list();
-    const messages = await host.session.messages({ agentId: e.agentId });
-    if (!Array.isArray(messages)) throw classify(name, { kind: "named", error: "unreadable_context" });
+    // Only the main loop has a view; a summary still running is waited for first.
+    if (e.agentId === undefined) await settled(view.pending(MAIN_LOOP), signal);
+    const transcript = await host.session.messages({ agentId: e.agentId });
+    if (!Array.isArray(transcript)) throw classify(name, { kind: "named", error: "unreadable_context" });
+    const messages = e.agentId === undefined ? view.apply(MAIN_LOOP, transcript) : transcript;
     const turns = normalizeMessages(messages, { id: e.model, vision: listed?.vision ?? metadata?.vision ?? false });
 
-    const offered = offeredTools(captured?.toolNames ?? listing.map((tool) => tool.name), listing);
+    const names = offeredToolNames(captured?.toolNames ?? listing.map((tool) => tool.name), transcript, listing, e.agentId);
+    const offered = offeredTools(names, listing);
     if (offered.skipped.length > 0) {
       host.ui.log(`routed request left out tools without a schema: ${offered.skipped.join(", ")}`, { to: "debug" });
     }

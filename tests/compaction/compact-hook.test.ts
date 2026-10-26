@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { compactFailure, compactSession, type CompactDeps } from "../../src/compaction/compact-hook.ts";
 import { MAIN_LOOP } from "../../src/routing/session-tracker.ts";
-import { CHAT_URL, MODEL, chatTurn, harness, postsTo, replies, signIn } from "../support/routing.ts";
+import { CHAT_URL, MODEL, chatTurn, harness, postsTo, replies, signIn, userText } from "../support/routing.ts";
 import { assistant, compactInput, compactNext, user, usageOf } from "../support/fake-turn.ts";
 
 const CLAUDE = "claude-sonnet-5-5";
@@ -9,7 +9,13 @@ const TRANSCRIPT = [user("Plan the notes change"), assistant("Here is the plan."
 
 // Each deps value over a harness, with the selected model the test chooses.
 function depsOf(h: ReturnType<typeof harness>, selected: string = MODEL): CompactDeps {
-  return { router: h.router, tracker: h.tracker, selectedModel: async () => selected };
+  return {
+    router: h.router,
+    tracker: h.tracker,
+    selectedModel: async () => selected,
+    view: h.view,
+    messages: () => h.engine.session.messages({ as: "api" }),
+  };
 }
 
 // AC1: a routed model's summary replaces the transcript, carries the focus, and never reaches Anthropic.
@@ -139,5 +145,56 @@ describe("the main loop's model", () => {
 
     expect(result).toEqual({ messages: [expect.objectContaining({ text: expect.stringContaining("Selected.") })] });
     expect(next.calls).toEqual([]);
+  });
+});
+
+// AC8: a compaction after an in-place summary summarizes that summary and the newer messages, then drops it.
+describe("compaction after an in-place summary", () => {
+  const API_TRANSCRIPT = [userText("Old question"), { role: "assistant" as const, content: [{ type: "text", text: "Old answer." }] }, userText("New question")];
+
+  it("summarizes the view's summary as prior plus the messages after its cut, and drops the view", async () => {
+    const h = harness({ http: replies(chatTurn({ text: "Whole summary." })) }, API_TRANSCRIPT);
+    await signIn(h.engine);
+    h.view.set(MAIN_LOOP, { summary: "Earlier work.", model: MODEL, cut: 2 });
+    const next = compactNext();
+
+    const result = await compactSession(depsOf(h), compactInput(TRANSCRIPT, { instructions: "keep the plan" }), next);
+
+    expect(result).toEqual({ messages: [expect.objectContaining({ text: expect.stringContaining("Whole summary.") })] });
+    const body = postsTo(h.engine, CHAT_URL)[0]?.body ?? "";
+    expect(body).toContain("[Earlier summary]: Earlier work.");
+    expect(body).toContain("[User]: New question");
+    expect(body).toContain("Additional focus: keep the plan");
+    expect(body).not.toContain("Old question");
+    expect(body).not.toContain("Plan the notes change");
+    expect(h.view.get(MAIN_LOOP)).toBeUndefined();
+    expect(next.calls).toEqual([]);
+    expect(h.engine.recorded.coreSummaries).toBe(0);
+  });
+
+  it("keeps the view and answers a skip naming the provider when the summary fails", async () => {
+    const h = harness({ http: (request) => (request.url === CHAT_URL ? { status: 500, text: "{}" } : undefined) }, API_TRANSCRIPT);
+    await signIn(h.engine);
+    h.view.set(MAIN_LOOP, { summary: "Earlier work.", model: MODEL, cut: 2 });
+    const next = compactNext();
+
+    const result = await compactSession(depsOf(h), compactInput(TRANSCRIPT), next);
+
+    expect(result).toEqual({ skip: "OpenCode Go could not summarize this conversation (server_error); it was not compacted." });
+    expect(h.view.get(MAIN_LOOP)).toEqual({ summary: "Earlier work.", model: MODEL, cut: 2 });
+    expect(next.calls).toEqual([]);
+  });
+
+  it("summarizes the engine's messages and drops a view the transcript no longer reaches", async () => {
+    const h = harness({ http: replies(chatTurn({ text: "Fresh." })) }, [userText("Only one")]);
+    await signIn(h.engine);
+    h.view.set(MAIN_LOOP, { summary: "Stale.", model: MODEL, cut: 4 });
+
+    await compactSession(depsOf(h), compactInput(TRANSCRIPT), compactNext());
+
+    const body = postsTo(h.engine, CHAT_URL)[0]?.body ?? "";
+    expect(body).toContain("[User]: Plan the notes change");
+    expect(body).not.toContain("Stale.");
+    expect(h.view.get(MAIN_LOOP)).toBeUndefined();
   });
 });

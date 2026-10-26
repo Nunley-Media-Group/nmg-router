@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { routeStep } from "../../src/routing/turn-step.ts";
+import type { TurnStepResult } from "claude-code";
+import type { ApiMessageInput } from "../../src/translate/messages.ts";
 import { CHAT_URL, MODEL, SESSION, chatTurn, collect, harness, postsTo, remember, replies, signIn, spyNext, step, textOf, userText } from "../support/routing.ts";
+import { deliverHandback } from "../support/fake-turn.ts";
 
 const CLAUDE = "claude-sonnet-5-5";
 
@@ -53,5 +56,55 @@ describe("subagent steps by their own model", () => {
     await collect(routeStep(h.router, step(0, MODEL, { agentId: "agent-1" }), spyNext()));
 
     expect(h.engine.recorded.status).toHaveLength(afterMain);
+  });
+});
+
+const HOST_TOOLS = [
+  { name: "Read", description: "Read a file", mcp: false },
+  { name: "WebFetch", description: "Fetch a page", mcp: false },
+  { name: "SubagentHandback", description: "Deliver your final report", mcp: false },
+];
+
+// A subagent transcript that loaded WebFetch through ToolSearch.
+const SUB_TRANSCRIPT: ApiMessageInput[] = [
+  userText("Sub task"),
+  { role: "assistant", content: [{ type: "tool_use", id: "search_1", name: "ToolSearch", input: { query: "select:WebFetch" } }] },
+  { role: "user", content: [{ type: "tool_result", tool_use_id: "search_1", content: [{ type: "tool_reference", tool_name: "WebFetch" }] }] },
+];
+
+function offeredNames(body: string | undefined): string[] {
+  const parsed = JSON.parse(body ?? "{}") as { tools?: { function: { name: string } }[] };
+  return (parsed.tools ?? []).map((tool) => tool.function.name);
+}
+
+// AC3, FR8: a routed subagent can hand its report back, and keeps the tools it loaded.
+describe("routed subagent tools", () => {
+  it("offers SubagentHandback and a ToolSearch-loaded tool to a routed subagent, and its report reaches the caller", async () => {
+    const report = { id: "call_handback_1", name: "SubagentHandback", input: { message: "The notes are fixed." } };
+    const main: ApiMessageInput[] = [userText("Main task")];
+    const h = harness({
+      http: replies(chatTurn({ tool: report })),
+      tools: HOST_TOOLS,
+      session: { id: SESSION, messages: main, agents: { "agent-1": SUB_TRANSCRIPT } },
+    });
+    await signIn(h.engine);
+    remember(h.capture, MODEL, "SUBAGENT PROMPT", ["Read"]);
+
+    const { result } = await collect(routeStep(h.router, step(0, MODEL, { agentId: "agent-1" }), spyNext()));
+
+    expect(offeredNames(postsTo(h.engine, CHAT_URL)[0]?.body)).toEqual(["Read", "WebFetch", "SubagentHandback"]);
+    const toolUses = (result as TurnStepResult).toolUses;
+    expect(deliverHandback(toolUses, main as never)).toBe(true);
+    expect(JSON.stringify(main)).toContain("The notes are fixed.");
+  });
+
+  it("does not offer SubagentHandback to the routed main loop", async () => {
+    const h = harness({ http: replies(chatTurn({ text: "Main." })), tools: HOST_TOOLS });
+    await signIn(h.engine);
+    remember(h.capture, MODEL, "MAIN PROMPT", ["Read", "SubagentHandback"]);
+
+    await collect(routeStep(h.router, step(0), spyNext()));
+
+    expect(offeredNames(postsTo(h.engine, CHAT_URL)[0]?.body)).toEqual(["Read"]);
   });
 });

@@ -64,3 +64,38 @@ describe("the summary request", () => {
     expect(buildSummaryRequest([], undefined, { id: "opencode-go/unknown" }).maxOutput).toBe(13107);
   });
 });
+
+// AC1, AC2: the API form serializes by the same rules, and an earlier summary is written first.
+describe("the summary request from the Messages API form", () => {
+  it("serializes API messages the same way as session rows, leaving out thinking and images", () => {
+    const long = "x".repeat(TOOL_RESULT_LIMIT + 5);
+    const api = [
+      { role: "user" as const, content: [{ type: "text", text: "Fix the notes" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "AA" } }] },
+      {
+        role: "assistant" as const,
+        content: [
+          { type: "thinking", thinking: "hidden" },
+          { type: "text", text: "Reading the file." },
+          { type: "tool_use", id: "call_1", name: "Read", input: { file_path: "notes.txt" } },
+        ],
+      },
+      { role: "user" as const, content: [{ type: "tool_result", tool_use_id: "call_1", content: [{ type: "text", text: long }] }] },
+    ];
+
+    expect(serializeMessages(api)).toBe(
+      [
+        "[User]: Fix the notes",
+        "[Assistant]: Reading the file.",
+        '[Tool Call]: Read({"file_path":"notes.txt"})',
+        `[Tool Result]: ${"x".repeat(TOOL_RESULT_LIMIT)}\n[... 5 more characters truncated]`,
+      ].join("\n"),
+    );
+  });
+
+  it("writes an earlier summary first, as prior", () => {
+    const request = buildSummaryRequest([user("Next task")], undefined, MODEL, "The earlier summary.");
+    const block = request.turns[0]?.blocks[0];
+
+    expect(block?.kind === "text" ? block.text : "").toMatch(/^<conversation>\n\[Earlier summary\]: The earlier summary\.\n\[User\]: Next task\n<\/conversation>/);
+  });
+});
