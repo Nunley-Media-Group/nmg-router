@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createVault } from "../../src/credentials/vault.ts";
 import { CredentialError } from "../../src/errors/errors.ts";
 import { fakeEngine, writtenText, type FakeEngine } from "../support/fake-engine.ts";
@@ -11,6 +11,41 @@ const VAULT = `${LINUX_DIR}/vault.json`;
 
 const MKDIR = `process:mkdir -p -m 700 ${LINUX_DIR}`;
 const CHMOD_DIR = `process:chmod 700 ${LINUX_DIR}`;
+
+// Node's WebCrypto, kept for the compatibility tests before the host stub replaces it.
+type AesParams = { name: "AES-GCM"; iv: Uint8Array; additionalData: Uint8Array; tagLength: 128 };
+type NodeSubtle = {
+  importKey(format: "raw", key: Uint8Array, algorithm: "AES-GCM", extractable: false, usages: string[]): Promise<unknown>;
+  encrypt(params: AesParams, key: unknown, data: Uint8Array): Promise<ArrayBuffer>;
+  decrypt(params: AesParams, key: unknown, data: Uint8Array): Promise<ArrayBuffer>;
+};
+const nodeCrypto = globalThis.crypto;
+const nodeSubtle = nodeCrypto.subtle as unknown as NodeSubtle;
+
+// The hooks environment's crypto: digest, randomUUID and getRandomValues, and nothing else.
+beforeEach(() => {
+  vi.stubGlobal("crypto", {
+    subtle: { digest: nodeCrypto.subtle.digest.bind(nodeCrypto.subtle) },
+    randomUUID: () => nodeCrypto.randomUUID(),
+    getRandomValues: <T extends ArrayBufferView>(array: T): T => nodeCrypto.getRandomValues(array),
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function aesParams(iv: Uint8Array, aad: string): AesParams {
+  return { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(aad), tagLength: 128 };
+}
+
+function nodeKey(keyText: string): Promise<unknown> {
+  return nodeSubtle.importKey("raw", Uint8Array.from(atob(keyText), (c) => c.charCodeAt(0)), "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
 
 async function vaultError(task: () => Promise<unknown>): Promise<unknown> {
   return task().then(
@@ -148,6 +183,40 @@ describe("keyfile vault on POSIX", () => {
 
     expect(engine.recorded.events).toContain(`process:mkdir -p -m 700 ${MAC_DIR}`);
     expect(writtenText(engine, `${MAC_DIR}/vault.json`)).toBeDefined();
+  });
+});
+
+describe("vault format compatibility with WebCrypto AES-GCM", () => {
+  it("runs with a host crypto whose subtle has digest only", () => {
+    expect(Object.keys(globalThis.crypto.subtle)).toEqual(["digest"]);
+  });
+
+  it("decrypts an entry that WebCrypto sealed", async () => {
+    const engine = fakeEngine({ platform: "linux" });
+    await createVault(engine, "linux").save("opencode-go", "default", "placeholder");
+    const keyText = writtenText(engine, KEY) ?? "";
+    const iv = nodeCrypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(
+      await nodeSubtle.encrypt(aesParams(iv, "nmg-router:opencode-go/default"), await nodeKey(keyText), new TextEncoder().encode("from-webcrypto")),
+    );
+    const doc = { version: 1, entries: { "opencode-go/default": { iv: bytesToBase64(iv), ct: bytesToBase64(ct) } } };
+    const reader = fakeEngine({ platform: "linux", files: { [KEY]: keyText, [VAULT]: JSON.stringify(doc) } });
+
+    expect(await createVault(reader, "linux").read("opencode-go", "default")).toBe("from-webcrypto");
+  });
+
+  it("seals an entry that WebCrypto decrypts with the same AAD", async () => {
+    const engine = fakeEngine({ platform: "linux" });
+    await createVault(engine, "linux").save("opencode-go", "work", "to-webcrypto");
+    const keyText = writtenText(engine, KEY) ?? "";
+    const entry = JSON.parse(writtenText(engine, VAULT) ?? "{}").entries["opencode-go/work"] as { iv: string; ct: string };
+    const iv = Uint8Array.from(atob(entry.iv), (c) => c.charCodeAt(0));
+    const ct = Uint8Array.from(atob(entry.ct), (c) => c.charCodeAt(0));
+
+    expect(iv).toHaveLength(12);
+    const plain = await nodeSubtle.decrypt(aesParams(iv, "nmg-router:opencode-go/work"), await nodeKey(keyText), ct);
+    expect(new TextDecoder().decode(plain)).toBe("to-webcrypto");
+    await expect(nodeSubtle.decrypt(aesParams(iv, "nmg-router:opencode-go/default"), await nodeKey(keyText), ct)).rejects.toThrow();
   });
 });
 

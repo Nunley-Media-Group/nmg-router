@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Encrypt the credential vault with a vendored AES-256-GCM, because the hooks environment's crypto.subtle offers digest only (#2)
+
 ## [0.4.0] - 2026-10-26
 
 ### Changed
