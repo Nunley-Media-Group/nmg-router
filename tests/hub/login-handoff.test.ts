@@ -21,12 +21,26 @@ describe("the hub's login hand-off", () => {
       h.hub,
     );
     keyed(h.hub.draw(drawnElements as never), "scope:xai")?.props.onPress?.();
+    // The faked login saves a credential, so the provider is no longer locked.
+    vi.mocked(loginToProvider).mockImplementationOnce(async () => {
+      (h.services.credentials as { list: unknown }).list = async () => [{ account: "default" }];
+      return { ok: true, text: "Logged in to xAI" };
+    });
     keyed(h.hub.draw(drawnElements as never), "login")?.props.onPress?.();
     await settle();
 
-    expect(vi.mocked(loginToProvider)).toHaveBeenCalledWith(h.host, "xai", h.services);
+    expect(vi.mocked(loginToProvider)).toHaveBeenCalledWith(
+      h.host,
+      "xai",
+      expect.objectContaining({ catalog: h.services.catalog, credentials: h.services.credentials }),
+    );
     expect(h.engine.recorded.ui).toContain("Logged in to xAI");
-    expect(h.engine.recorded.panes.filter((pane) => pane.id === HUB_PANE_ID)).toHaveLength(2);
-    expect(textOf(h.hub.draw(drawnElements as never))).toContain("xAI");
+    // The login ran in the hub's own pane: the hub was never closed or opened anew.
+    expect(h.engine.recorded.paneCloses).toEqual([]);
+    expect(h.engine.recorded.panes.every((pane) => pane.id === HUB_PANE_ID)).toBe(true);
+    const drawn = h.hub.draw(drawnElements as never);
+    expect(textOf(drawn)).not.toContain("has no credentials");
+    expect(keyed(drawn, "scope:xai")?.props.dimColor).toBe(false);
+    expect(keyed(drawn, "search")).toBeDefined();
   });
 });

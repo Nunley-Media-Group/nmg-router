@@ -18,6 +18,8 @@ export type HubState = {
   readonly refreshing: ReadonlySet<string>;
   readonly currentModel: string;
   readonly contextTokens: number;
+  // Why the last pick was refused, drawn in the pane until the search or scope changes.
+  readonly notice?: string;
 };
 
 export type SidebarEntry = {
@@ -44,6 +46,7 @@ export type HubView = {
   readonly sidebar: readonly SidebarEntry[];
   readonly rows: readonly VisibleRow[];
   readonly detail?: string;
+  readonly notice?: string;
   readonly locked?: { readonly id: string; readonly label: string; readonly rows: readonly HubRow[] };
 };
 
@@ -206,12 +209,13 @@ export function hubView(state: HubState, sources: readonly HubSource[], recent: 
     sidebar,
     rows,
     ...(highlighted === undefined ? {} : { detail: detailLine(highlighted.row) }),
+    ...(state.notice === undefined ? {} : { notice: state.notice }),
   };
 }
 
 // The query with the search applied: an active scope with no matches falls back to all models.
 export function withQuery(state: HubState, query: string, sources: readonly HubSource[], recent: RecentMap): HubState {
-  const next: HubState = { ...state, query, highlighted: undefined };
+  const next: HubState = { ...state, query, highlighted: undefined, notice: undefined };
   if (state.scope === ALL_SCOPE || !isSearching(query)) return next;
   const matches = searchRows(rowsOf(state.scope, sources), query, recent).length;
   return matches === 0 ? { ...next, scope: ALL_SCOPE, view: "list" } : next;
@@ -221,7 +225,7 @@ export function withQuery(state: HubState, query: string, sources: readonly HubS
 export function withScope(state: HubState, scope: string, sources: readonly HubSource[]): HubState {
   const source = sourceOf(scope, sources);
   if (scope === ALL_SCOPE || source === undefined) {
-    return { ...state, scope: ALL_SCOPE, view: "list", highlighted: undefined };
+    return { ...state, scope: ALL_SCOPE, view: "list", highlighted: undefined, notice: undefined };
   }
-  return { ...state, scope, view: source.isLocked() ? "locked" : "list", highlighted: undefined };
+  return { ...state, scope, view: source.isLocked() ? "locked" : "list", highlighted: undefined, notice: undefined };
 }

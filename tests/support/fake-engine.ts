@@ -82,7 +82,12 @@ export type FakeHttpReply = {
 
 export type FakeHttpResponder = (request: FakeHttpRequest) => FakeHttpReply | undefined;
 
-export type FakePaneOpen = { readonly id: string; readonly title?: string; readonly focus?: boolean };
+export type FakePaneOpen = {
+  readonly id: string;
+  readonly title?: string;
+  readonly focus?: boolean;
+  readonly holdToasts?: boolean;
+};
 
 export type RecordedProcess = {
   readonly argv: string[];
@@ -99,6 +104,8 @@ export type Recorded = {
   readonly ui: string[];
   // Each `$.ui.toast` text, in order.
   readonly toasts: string[];
+  // The toasts raised while an open pane holds them (`holdToasts`), so none was drawn.
+  readonly heldToasts: string[];
   readonly panes: FakePaneOpen[];
   readonly paneCloses: string[];
   // Each element key the mod moved a pane's focus ring onto.
@@ -131,6 +138,9 @@ export type FakeEngine = Pick<
   // Runs a hook as the engine runs one for the person's command: a pane opened
   // before it settles is asked, and is placed at any width.
   asking<T>(run: () => T | Promise<T>): Promise<T>;
+  // Runs a press handler as the engine runs a person's press: only a pane opened
+  // before the handler's first await is asked.
+  pressing(run: () => void): void;
   // The pane id holding the keyboard, or undefined while the prompt has it.
   keyboard(): string | undefined;
   // Hands the keyboard back to the prompt, as the host does when a pane holds
@@ -176,6 +186,7 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     settingsWrites: [],
     ui: [],
     toasts: [],
+    heldToasts: [],
     panes: [],
     paneCloses: [],
     focus: [],
@@ -199,6 +210,8 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
   const askedPanes = new Set<string>();
   let keysWith: string | undefined;
   const placedPanes = new Set<string>();
+  // Open panes whose last open asked to hold toasts.
+  const holdingPanes = new Set<string>();
 
   function uname(): ProcessRunResult {
     const name = { macos: "Darwin", linux: "Linux", windows: "Windows_NT", other: "FreeBSD" }[options.platform];
@@ -256,6 +269,14 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       askingDepth += 1;
       try {
         return await run();
+      } finally {
+        askingDepth -= 1;
+      }
+    },
+    pressing: (run: () => void): void => {
+      askingDepth += 1;
+      try {
+        run();
       } finally {
         askingDepth -= 1;
       }
@@ -382,6 +403,7 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       },
       toast: (text: string) => {
         recorded.toasts.push(text);
+        if (holdingPanes.size > 0) recorded.heldToasts.push(text);
       },
       // The fake's elements record their props, so a test reads the drawn tree and calls its handlers.
       resolve: () => drawnElements,
@@ -394,6 +416,9 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
         const floor = askedPanes.has(pane.id) ? 110 : 144;
         if (askingDepth > 0 || columns >= floor || placedPanes.has(pane.id)) {
           placedPanes.add(pane.id);
+          // A shown pane holds toasts as its latest open asked: every open sets it anew.
+          if (pane.holdToasts === true) holdingPanes.add(pane.id);
+          else holdingPanes.delete(pane.id);
           // `focus` is granted here: the fake prompt is always idle and empty.
           if (pane.focus === true) keysWith = pane.id;
           return { isPlaced: true };
@@ -403,6 +428,7 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       close: async (pane: { id: string }) => {
         recorded.paneCloses.push(pane.id);
         placedPanes.delete(pane.id);
+        holdingPanes.delete(pane.id);
         if (keysWith === pane.id) keysWith = undefined;
       },
       // As the host: only a site holding the keyboard moves its ring.

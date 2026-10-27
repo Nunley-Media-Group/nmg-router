@@ -16,8 +16,9 @@ function input(args: string): CommandRunInput {
   } as unknown as CommandRunInput;
 }
 
+// As the person's command: the hub's open is asked, so it is placed at any width.
 async function openBare(h: HubHarness): Promise<void> {
-  const result = await handleModelCommand(h.host, input(""), vi.fn(), h.hub);
+  const result = await h.engine.asking(() => handleModelCommand(h.host, input(""), vi.fn(), h.hub));
   expect(result).toEqual({});
 }
 
@@ -127,9 +128,11 @@ describe("/model with no arguments", () => {
     expect(textOf(tree(h))).toContain("context>128k");
     keyed(tree(h), "row:opencode-go/kimi-k3.1-pro")?.props.onPress?.();
     await settle();
-    expect(h.engine.recorded.toasts).toEqual([
-      "Kept claude-sonnet-5-5: this conversation is larger than opencode-go/kimi-k3.1-pro's window.",
-    ]);
+    const notice = "Kept claude-sonnet-5-5: this conversation is larger than opencode-go/kimi-k3.1-pro's window.";
+    expect(h.engine.recorded.toasts).toEqual([notice]);
+    // The hub holds no toasts, and draws the notice itself while it stays open.
+    expect(h.engine.recorded.heldToasts).toEqual([]);
+    expect(textOf(tree(h))).toContain(notice);
     expect(h.engine.recorded.commands).toEqual([]);
     expect(h.engine.recorded.paneCloses).toEqual([]);
     expect(h.engine.recorded.compacts).toEqual([]);
@@ -157,15 +160,35 @@ describe("/model with no arguments", () => {
     expect(h.engine.recorded.commands).toEqual([expect.objectContaining({ command: "model", args: "opus" })]);
   });
 
-  it("shows a locked provider's bundled models and login, and a cancelled login keeps the hub closed", async () => {
-    const h = await hubHarness();
+  it("clears the refusal notice when the search changes", async () => {
+    const h = await hubHarness({ contextTokens: 200000 });
+    await openBare(h);
+    keyed(tree(h), "row:opencode-go/kimi-k3.1-pro")?.props.onPress?.();
+    await settle();
+    keyed(tree(h), "search")?.props.onInput?.("glm");
+    expect(textOf(tree(h))).not.toContain("Kept claude-sonnet-5-5");
+  });
+
+  it("draws a locked provider's login in the hub's pane below 110 columns, and Esc cancels back to the hub", async () => {
+    const h = await hubHarness({ columns: 91 });
     await openBare(h);
     keyed(tree(h), "scope:xai")?.props.onPress?.();
     expect(textOf(tree(h))).toContain("xAI has no credentials.");
-    keyed(tree(h), "login")?.props.onPress?.();
+    expect(textOf(tree(h))).toContain("1 model in catalog:");
+    h.engine.pressing(() => keyed(tree(h), "login")?.props.onPress?.());
     await settle();
-    expect(h.engine.recorded.paneCloses).toEqual([HUB_PANE_ID]);
+    // No second pane, nothing closed and nothing left undrawn: the key step is in the hub.
+    expect(h.engine.recorded.panes.every((pane) => pane.id === HUB_PANE_ID)).toBe(true);
+    expect(h.engine.recorded.paneCloses).toEqual([]);
+    expect(h.engine.recorded.ui.join("\n")).not.toContain("could not be shown");
+    expect(textOf(tree(h))).toContain("xAI API key");
+    expect(h.engine.keyboard()).toBe(HUB_PANE_ID);
+    expect(h.engine.recorded.focus.at(-1)).toBe("secret");
+
+    expect(h.hub.refusesClose({ kind: "person" })).toBe(true);
+    await settle();
     expect(h.engine.recorded.ui).toContain("Login cancelled.");
-    expect(h.engine.recorded.panes.filter((pane) => pane.id === HUB_PANE_ID)).toHaveLength(1);
+    expect(textOf(tree(h))).toContain("xAI has no credentials.");
+    expect(h.engine.recorded.paneCloses).toEqual([]);
   });
 });

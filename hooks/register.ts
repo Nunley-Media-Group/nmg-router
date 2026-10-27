@@ -333,14 +333,14 @@ export const register: Register = (on, options) => {
     return hub.draw($.ui.resolve(e));
   });
 
-  // A row taking the focus shows its detail line; the hub's Esc refuses a close that only clears a search.
+  // A row taking the focus shows its detail line; the hub's Esc refuses a close that only clears a search or cancels a login.
   on("ui.focus", { requestId: HUB_PANE_ID }, ($, e, next) => {
     hub?.focused(e.element);
     return next(e);
   });
 
   on("ui.close", { id: HUB_PANE_ID }, (_, e, next) => {
-    if (hub?.refusesClose(e.origin) === true) return { deny: "The search was cleared first." };
+    if (hub?.refusesClose(e.origin) === true) return { deny: "Esc cleared the search or cancelled the login; the hub stays open." };
     return next(e);
   });
 };

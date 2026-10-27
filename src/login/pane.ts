@@ -1,4 +1,4 @@
-import type { Elements, RenderChildren, RenderElement } from "claude-code";
+import type { Elements, PaneOpenArgs, RenderChildren, RenderElement } from "claude-code";
 import type { HostPort } from "../host.ts";
 import { fuzzyFilter } from "./fuzzy.ts";
 import { applyInput, maskOf } from "./masked-input.ts";
@@ -18,6 +18,10 @@ import { applyInput, maskOf } from "./masked-input.ts";
 // the ring onto its field with `ui.focus`, asking for the keys again if the pane
 // lost them. A `begin` hands back its hold, and only that hold's `end` closes the
 // pane, so a flow superseded by the next command cannot close that command's pane.
+//
+// The model hub lends its own pane for a locked provider's login (`lent`): the steps
+// draw there, so no second pane has to be placed, and the controller never closes it
+// or holds its toasts; a step it would close ends and hands the pane back instead.
 
 export const PANE_ID = "nmg-router-login";
 
@@ -87,12 +91,22 @@ export type PaneController = {
   isOpen(): boolean;
 };
 
-const OPEN_ARGS = { id: PANE_ID, focus: true, closeOnEscape: true, holdToasts: true } as const;
+// The pane a controller draws in: the login pane by default, or another lent to it.
+export type PaneSite = { readonly id: string; readonly lent: boolean };
 
-export function createPaneController(): PaneController {
+const LOGIN_SITE: PaneSite = { id: PANE_ID, lent: false };
+
+export function createPaneController(site: PaneSite = LOGIN_SITE): PaneController {
+  const openArgs: PaneOpenArgs = { id: site.id, focus: true, closeOnEscape: true, ...(site.lent ? {} : { holdToasts: true }) };
   let pending: Pending | undefined;
   // The pane held open by the latest `begin`, until its `end`.
   let held: PaneHold | undefined;
+
+  // A lent pane stays open for its owner, which draws its own view again.
+  async function closeSite(host: PaneHost): Promise<void> {
+    if (site.lent) host.ui.invalidate("ui.render");
+    else await host.ui.close({ id: site.id }).catch(() => undefined);
+  }
 
   function settle(result: PaneResult, closePane: boolean): void {
     const current = pending;
@@ -105,7 +119,7 @@ export function createPaneController(): PaneController {
       redraw(current);
       return;
     }
-    if (closePane && held === undefined) current.host.ui.close({ id: PANE_ID }).catch(() => undefined);
+    if (closePane && held === undefined) void closeSite(current.host);
   }
 
   function redraw(state: Pending): void {
@@ -123,10 +137,10 @@ export function createPaneController(): PaneController {
   // Puts the ring on the step's field. A held pane that lost the keyboard while
   // the flow worked asks for it again, as its first open did, and retries once.
   async function focusStep(hold: PaneHold, view: PaneView): Promise<void> {
-    const target = { requestId: PANE_ID, key: fieldOf(view) };
+    const target = { requestId: site.id, key: fieldOf(view) };
     try {
       if ((await hold.host.ui.focus(target)).deny === undefined || hold !== held || hold.closed) return;
-      const opened = await hold.host.ui.open({ ...OPEN_ARGS, title: view.title });
+      const opened = await hold.host.ui.open({ ...openArgs, title: view.title });
       if (opened.isPlaced && hold === held && !hold.closed) await hold.host.ui.focus(target);
     } catch {
       // The person can still click or Tab into the field.
@@ -240,7 +254,7 @@ export function createPaneController(): PaneController {
       const hold: PaneHold = { host, closed: false };
       held = hold;
       try {
-        const opened = await host.ui.open({ ...OPEN_ARGS, title });
+        const opened = await host.ui.open({ ...openArgs, title });
         if (opened.isPlaced) return { isPlaced: true, hold };
         await this.end(hold);
         return { isPlaced: false, reason: opened.reason };
@@ -253,7 +267,7 @@ export function createPaneController(): PaneController {
       if (hold !== held) return;
       held = undefined;
       settle({ kind: "cancelled" }, false);
-      if (!hold.closed) await hold.host.ui.close({ id: PANE_ID }).catch(() => undefined);
+      if (!hold.closed) await closeSite(hold.host);
     },
     async open(host, view) {
       settle({ kind: "cancelled" }, false);
@@ -270,7 +284,7 @@ export function createPaneController(): PaneController {
         return result;
       }
       try {
-        const opened = await host.ui.open({ ...OPEN_ARGS, title: view.title });
+        const opened = await host.ui.open({ ...openArgs, title: view.title });
         if (!opened.isPlaced) {
           // An undrawn pane cannot be answered, so the step ends instead of waiting.
           host.ui.log(`The login pane could not be shown: ${opened.reason}`);
@@ -299,7 +313,7 @@ export function createPaneController(): PaneController {
               autoFocus: true,
               onPress: () => {
                 hold.closed = true;
-                hold.host.ui.close({ id: PANE_ID }).catch(() => undefined);
+                void closeSite(hold.host);
               },
             }),
           ],

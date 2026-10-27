@@ -50,7 +50,7 @@ describe("the model hub's hooks", () => {
     keyed(drawHubPane(dispatch), "search")?.props.onInput?.("kimi");
 
     const refused = await dispatch("ui.close", { id: HUB_PANE_ID, origin: { kind: "person" } });
-    expect(refused).toEqual({ deny: "The search was cleared first." });
+    expect(refused).toEqual({ deny: "Esc cleared the search or cancelled the login; the hub stays open." });
     expect(keyed(drawHubPane(dispatch), "search")?.props.value).toBe("");
 
     const closed = await dispatch("ui.close", { id: HUB_PANE_ID, origin: { kind: "person" } });

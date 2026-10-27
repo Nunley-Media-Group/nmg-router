@@ -125,7 +125,7 @@ describe("hub view", () => {
     const { actions } = recordingActions();
     const tree = draw(withScope(state(), "xai", sources), actions);
     expect(textOf(tree)).toContain("xAI has no credentials.");
-    expect(textOf(tree)).toContain("models in catalog:");
+    expect(textOf(tree)).toContain("1 model in catalog:");
     expect(textOf(tree)).toContain("xai/grok-4.6");
     const login = keyed(tree, "login");
     expect(login?.props.label).toBe("Log in to xAI");

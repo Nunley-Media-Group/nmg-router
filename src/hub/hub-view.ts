@@ -3,13 +3,14 @@ import type { HubRow } from "./sources.ts";
 import type { HubView, SidebarEntry, VisibleRow } from "./hub-state.ts";
 
 // Draws the hub's view model with Box, Text, Input and Button only. Each action is a
-// closure the controller supplies, so the drawing holds no state of its own.
+// closure the controller supplies, so the drawing holds no state of its own. The
+// elements include Select for a login the controller draws in the hub's pane.
 //
 // The host's focus ring holds a position in document order, not a key. So the main
 // column, with the search field first, is drawn before the sidebar: a search that
 // turns sidebar buttons into text moves nothing ahead of the field.
 
-export type HubElements = Pick<Elements["terminal"], "Box" | "Text" | "Button" | "Input">;
+export type HubElements = Pick<Elements["terminal"], "Box" | "Text" | "Button" | "Input" | "Select">;
 
 export type HubActions = {
   selectScope(id: string): void;
@@ -64,7 +65,8 @@ function listChildren(elements: HubElements, view: HubView, actions: HubActions)
       onSubmit: () => actions.submit(),
     }),
   ];
-  // The detail line and the footer sit above the rows, so a list taller than the pane never hides them.
+  // The notice, the detail line and the footer sit above the rows, so a list taller than the pane never hides them.
+  if (view.notice !== undefined) children.push(Text({ color: "warning", children: view.notice }));
   if (view.detail !== undefined) children.push(Text({ children: view.detail }));
   children.push(Text({ dimColor: true, children: FOOTER }));
   if (view.rows.length === 0) {
@@ -82,7 +84,7 @@ function lockedChildren(elements: HubElements, view: HubView, actions: HubAction
   if (locked === undefined) return [];
   const children: RenderChildren[] = [
     Text({ bold: true, children: `${locked.label} has no credentials.` }),
-    Text({ dimColor: true, children: `${locked.rows.length} models in catalog:` }),
+    Text({ dimColor: true, children: `${locked.rows.length} ${locked.rows.length === 1 ? "model" : "models"} in catalog:` }),
     ...locked.rows.map((row) => Text({ dimColor: true, children: row.switchArg })),
     Button({
       key: "login",
