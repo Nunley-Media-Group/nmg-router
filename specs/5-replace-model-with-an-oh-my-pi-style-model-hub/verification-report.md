@@ -4,7 +4,7 @@
 **Issue**: #5
 **Reviewer**: Claude Code (nmg-sdlc verify worker, run aeea8b3d-18a4-45f7-84d7-d58bd8b7d91d)
 **Scope**: Implementation verification against the Approved spec
-**Verification head**: dfa5b72733276dcadfacebed6617e238112a2542
+**Verification head**: 5ffca43e9e9c428f6e11d6076a7b0ea4381ad004
 
 ---
 
@@ -12,27 +12,25 @@
 
 | Category | Score (1-5) |
 |----------|-------------|
-| Spec Compliance | 3 |
+| Spec Compliance | 4 |
 | Architecture (SOLID) | 4 |
 | Security | 4 |
 | Performance | 4 |
 | Testability | 3 |
 | Error Handling | 4 |
-| **Overall** | 3.7 |
+| **Overall** | 3.8 |
 
 ### Implementation Status: Fail
-**Total Issues**: 3 (2 High, 1 Low)
+**Total Issues**: 2 (1 High, 1 Low)
 
-The registered gate is green: typecheck, 508/508 tests and `claude plugin validate .` all pass at `dfa5b72`. The fix commit resolves both findings from the previous run, and the live herdr run at 91 columns confirms each fix:
+The registered gate is green at `5ffca43`: typecheck, 516/516 tests and `claude plugin validate .` all pass. The live herdr run started from a settings file with no `modelPicker` rows, and it confirms most of the fix commit:
 
-- **H4 fixed (AC5).** "Log in to xAI" now draws its steps inside the hub pane. The key prompt appears at 91 columns, and Esc cancels back to the locked xAI view.
-- **H5 fixed (AC7).** The refused over-window pick now shows its `Kept <current>: …` notice inside the pane and as a toast while the hub is open. The model and the pane stay as they were.
-- **L2 fixed.** The locked view reads `1 model in catalog:`.
+- **H7 fixed (AC4, AC8).** In the first session after the rows were written, `/model opencode-go/kimi-k3.1-pro` switched at once, and the routed model answered.
+- **H6 partly fixed (AC6).** After Esc clears a search typed in the search field, the hub keeps the keyboard, and the next letters go into the search. After Esc cancels a login, the hub also keeps the keyboard.
 
-The run found two new defects:
+One defect remains:
 
-- **H6, AC6/FR2.** Esc on a non-empty search clears it and keeps the hub open, but the hub loses keyboard focus to the main prompt. Typed letters then land in the prompt, and ↑ recalls prompt history, so the next Enter can submit a stale prompt. The Esc-clear branch of `refusesClose` redraws without `keepRing()`, unlike the login-cancel branch above it.
-- **H7, AC4/AC8.** Claude Code does not pick up `modelPicker` rows that the mod writes after the session has started. On a session whose settings file had no rows at startup, `session.start` wrote 38 rows, but `/model opencode-go/kimi-k3.1-pro` answered `Model 'opencode-go/kimi-k3.1-pro' not found` twice, about a minute apart. After a restart, with the rows already in the file, the same command switched. This affects the first session after install and any routed model added mid-session, such as a provider's models after a hub login (AC5).
+- **H8, AC6/FR2 (H6 still open in one case).** If a row is highlighted when Esc clears the search, the hub loses the keyboard to the main prompt. The pane stays open, but letters typed next appear in the main prompt (`❯ hai`, `❯ z`, `❯ opus`). This happened in 3 of 3 tries with the row highlighted (queries `fake` after a refused pick, `glm` + ↓, `qwen` + ↓↓). It happened in 0 of 2 tries with the ring on the search field. The new unit test (`tests/hub/model-command.test.ts:135`) covers only the search-field case.
 
 ---
 
@@ -56,15 +54,15 @@ The run found two new defects:
 
 ## Deterministic Steering Artifact and Ceiling
 
-`sdlc-verify-steering.mjs --base main --controller-run-id aeea8b3d-…` returned `ok: true` with `ceiling: null` and wrote `.nmg-sdlc/verification/5.json`. Coverage was declared 3, recorded 3, `complete: true`, with no entries missing, duplicated or unknown. Identity: head `dfa5b727`, tree clean.
+`sdlc-verify-steering.mjs --base main --controller-run-id aeea8b3d-…` returned `ok: true` with `ceiling: null` and wrote `.nmg-sdlc/verification/5.json`. Coverage: declared 3, recorded 3, `complete: true`, with nothing missing, duplicated or unknown. Identity: head `5ffca43e`, tree clean.
 
 | Validation | Provider | Required | Result |
 |------------|----------|----------|--------|
 | `repository.typecheck` | builtin.command | yes | passed (`tsc --noEmit` exit 0) |
-| `repository.tests` | builtin.command | yes | passed (508 tests) |
-| `repository.plugin-manifest` | builtin.command | yes | passed |
+| `repository.tests` | builtin.command | yes | passed (64 files, 516 tests) |
+| `repository.plugin-manifest` | builtin.command | yes | passed (warnings only: no author, root CLAUDE.md, no icon) |
 
-The registered gate imposes no ceiling. The overall status is Fail because of the interactive findings H6 and H7.
+The registered gate sets no ceiling. The overall status is Fail because of the interactive finding H8.
 
 ---
 
@@ -72,30 +70,32 @@ The registered gate imposes no ceiling. The overall status is Fail because of th
 
 | AC | Description | Status | Evidence |
 |----|-------------|--------|----------|
-| AC1 | Hub layout | Pass | Live: `All models (43)`, `Claude (5)`, `Fake Local (1)`, `OpenCode Go (37)`, `ClinePass (0)`, `OpenAI Codex (1)`, `xAI (1)`, with the locked entries after the logged-in ones. Dimming cannot be seen in a plain-text read (L1). Unit: `tests/hub/hub-state.test.ts` |
-| AC2 | Rows and details | Pass | Live: `[ opencode-go/kimi-k3.1-pro ✓  11t/s ]`, `[ opencode-go/kimi-k3  1.049m  $3/15  50t/s ]`. Detail line for the fake row: `Fake Small · 20k ctx · 4k out`. The ✓ followed the current model |
-| AC3 | Search and order | Pass | Live: `kimi` listed `All models (4)` with only kimi rows, and the recently used `kimi-k3.1-pro` first. Zero-match entries were plain text (`Claude (0)`, `xAI (0)`) |
-| AC4 | Selection switches the model | **Fail** | Live, second session: `/model opencode-go/kimi-k3.1-pro` → `Set model to OpenCode Go · kimi-k3.1-pro`, and the model answered `OK` to "Remember the word PELICAN". Hub pick `Opus` → host's `Switch model?` prompt → `❯ /model opus ⎿ Set model to Opus 5.5`, and Opus answered `PELICAN`. Hub pick `opencode-go/kimi-k3.1-pro` → `❯ /model opencode-go/kimi-k3.1-pro ⎿ Set model to OpenCode Go · kimi-k3.1-pro`, and the routed model answered `PELICAN`. First session: refused with `Model 'opencode-go/kimi-k3.1-pro' not found` (H7) |
-| AC5 | Unauthenticated provider | Partial | Live: Enter on `xAI (1)` → `xAI has no credentials.` / `1 model in catalog:` / `xai/grok-4.6` / `[ Log in to xAI ]`. Enter → in the same pane: `Log in to xAI` / `The key is checked against the provider before it is saved.` / `xAI API key: (paste or type the key)` / `[ Cancel ]`. Esc → `Login cancelled.` and the locked xAI view again. Reopening on xAI after a successful login needs the user's own xAI key and was not run. Under H7, xAI's rows written after that login could not be switched to until the next session. Unit: `tests/hub/login-handoff.test.ts` |
-| AC6 | Arguments, refresh and Esc | **Fail** | Live: `/model <id>` switched directly with no hub. Esc with the query `glm` (and earlier `fake`) cleared it with the pane open, and a second Esc closed the hub. But after the first Esc the hub lost keyboard focus: `kimi` typed next appeared in the main prompt (`❯ kimi`), and ↑ recalled prompt history (H6). The first-open refresh has no visible live signal. Unit: `tests/hub/model-command.test.ts` |
-| AC7 | Smaller context window | Pass | Live: the row showed `fakelocal/fake-small ⊘ context>20k  20k`. Enter kept `opencode-go/kimi-k3.1-pro` and kept the pane open, which drew `Kept opencode-go/kimi-k3.1-pro: this conversation is larger than fakelocal/fake-small's window.` while a matching toast showed at the same time (H5 fixed). `$.session.compact()` is never called (unit: `tests/hub/model-command.test.ts`) |
-| AC8 | Settings rows | Pass | Live: the pre-run settings file had no `modelPicker`. At session start the mod wrote `modelPicker.options` with 38 provider-labeled rows (e.g. `OpenCode Go · deepseek-v4.1-flash`). `replaceBuiltInOptions` stayed unset, and every other key matched the backup. The host taking those rows only in the next session is H7, filed under AC4 |
+| AC1 | Hub layout | Pass | Live: `[ All models (43) ]`, `[ Claude (5) ]`, `[ Fake Local (1) ]`, `[ OpenCode Go (37) ]`, `[ ClinePass (0) ]`, `[ OpenAI Codex (1) ]`, `[ xAI (1) ]`, with the locked entries after the logged-in ones. A plain-text read cannot show dimming (L1). Unit: `tests/hub/hub-state.test.ts` |
+| AC2 | Rows and details | Pass | Live: `[ opencode-go/kimi-k3.1-pro ✓  18t/s ]`, `[ opencode-go/kimi-k3  1.049m  $3/15  50t/s ]`, `[ opencode-go/glm-5.1  203k  $1.4/4.4 ]`. Highlighting `kimi-k3` showed the detail line `Kimi K3 · 1.049m ctx · 131k out · $3/15 per M · reasoning · vision`. The ✓ followed the current model |
+| AC3 | Search and order | Pass | Live: `kimi` gave `All models (4)` and `OpenCode Go (4)`, with only kimi rows and the recently used `kimi-k3.1-pro` first. Zero-match entries became plain text without brackets (`Claude (0)`, `xAI (0)`) |
+| AC4 | Selection switches the model | Pass | Live, first session (no rows at startup): `/model opencode-go/kimi-k3.1-pro` → `Set model to OpenCode Go · kimi-k3.1-pro`, then `Remember the word PELICAN` → `OK` (routed). Hub pick `Opus` → host `Switch model?` → Yes → `❯ /model opus ⎿ Set model to Opus 5.5`, and Opus recalled `PELICAN`. Hub pick `kimi-k3.1-pro` → `❯ /model opencode-go/kimi-k3.1-pro ⎿ Set model to OpenCode Go · kimi-k3.1-pro`, and the routed model recalled `PELICAN` (H7 fixed) |
+| AC5 | Unauthenticated provider | Partial | Live: Enter on `xAI (1)` → `xAI has no credentials.` / `1 model in catalog:` / `xai/grok-4.6` / `[ Log in to xAI ]`. Enter → in the pane: `Log in to xAI` / `The key is checked against the provider before it is saved.` / `xAI API key: (paste or type the key)` / `[ Cancel ]`. Esc → `⏺ nmg-router: Login cancelled.` and the locked view, with the keyboard still on the hub (Enter started the login again). Reopening on xAI after a successful login needs the user's own xAI key and was not run. Unit: `tests/hub/login-handoff.test.ts` |
+| AC6 | Arguments, refresh and Esc | **Fail** | Live: `/model <id>` switched directly with no hub. Esc with a non-empty search cleared it and kept the pane, and Esc with an empty search closed the hub. With the ring on the search field, letters typed after the clear went into the search (`hai ⏎ submit`). With a row highlighted, they went into the main prompt instead (H8). The first-open refresh has no visible live signal. Unit: `tests/hub/model-command.test.ts` |
+| AC7 | Smaller context window | Pass | Live: the row showed `fakelocal/fake-small ⊘ context>20k  20k`. Enter kept `opencode-go/kimi-k3.1-pro` and the pane, which drew `Kept opencode-go/kimi-k3.1-pro: this conversation is larger than fakelocal/fake-small's window.` while a matching toast showed. Unit: no `$.session.compact()` call (`tests/hub/model-command.test.ts`) |
+| AC8 | Settings rows | Pass | Live: the pre-run file had no `modelPicker`. At session start the mod wrote 38 provider-labeled `modelPicker.options` rows (e.g. `OpenCode Go · deepseek-v4.1-flash`). `replaceBuiltInOptions` stayed unset. After the run, only `modelPicker` and `model` differed from the backup, and `model` was written by core's `/model` ("saved as your default"). Core took the rows in the same session (AC4) |
 
 ### Interactive evidence (herdr)
 
-Tab `verify-5` (pane width 91 columns), `herdr agent start verify-5 --kind claude --pane <pane> -- --plugin-dir .`. Claude Code v2.1.311. No startup dialog and no hook or plugin load error. `~/.claude/settings.json` was backed up before the run and restored byte-identical after it (`cmp` clean).
+Tab `verify-5` (pane width 91 columns), `herdr agent start verify-5 --kind claude --pane <pane> -- --plugin-dir .`. Claude Code v2.1.311. There was no startup dialog and no hook or plugin load error. `~/.claude/settings.json` was backed up before the run and restored byte-identical after it (`cmp` clean).
 
-1. Session 1 start: the settings file gained 38 `modelPicker.options` rows. `replaceBuiltInOptions` stayed unset, and the other keys were unchanged.
-2. `/model opencode-go/kimi-k3.1-pro` → `⎿ Model 'opencode-go/kimi-k3.1-pro' not found`. It was retried about a minute later with the same result (H7). `/exit`.
-3. Session 2 (rows present at startup): `/model opencode-go/kimi-k3.1-pro` → `⎿ Set model to OpenCode Go · kimi-k3.1-pro and saved as your default for new sessions`. Then `Remember the word PELICAN. Reply only OK.` → `⏺ OK` (routed).
-4. `/model` → `│ [ All models (43) ]  Type to search ⏎ submit │ … │ [ opencode-go/kimi-k3.1-pro ✓  11t/s ] │ … │ [ fakelocal/fake-small ⊘ context>20k  20k ] │`.
-5. `f a k e`, ↓, Enter → `│ Kept opencode-go/kimi-k3.1-pro: this conversation is larger than fakelocal/fake-small's window. │`, with the toast `│ nmg-router │ Kept opencode-go/kimi-k3.1-pro: this … │` drawn while the pane was open. The model was unchanged.
-6. Esc → `All models (43)  Type to search`, with the pane open but without the `⏎ submit` focus hint. ↑×8 and `k i m i` → the main prompt read `❯ [Pasted text #3 +271 lines]kimi`, recalled from history. It was cleared with ctrl+u and not submitted. Repeated with the query `glm` and no pick: after Esc, `kimi` landed in the main prompt again (`❯ kimi`). A further Esc with an empty search closed the hub (H6).
-7. `/model`, `x a i`, Tab, Enter → `xAI has no credentials. / 1 model in catalog: / xai/grok-4.6 / [ Log in to xAI ]`. Enter → `Log in to xAI / The key is checked against the provider before it is saved. / xAI API key: (paste or type the key) / [ Cancel ]` in the hub pane. No key was typed. Esc → `⏺ nmg-router: Login cancelled.` and the locked xAI view again (H4 fixed).
-8. `/model`, `o p u s`, ↓, Enter → host `Switch model?` → `1. Yes` → `❯ /model opus ⎿ Set model to Opus 5.5`. `What word did I ask you to remember?` → `⏺ PELICAN`.
-9. `/model`, `k i m i`, ↓, Enter → host `Switch model?` → `1. Yes` → `❯ /model opencode-go/kimi-k3.1-pro ⎿ Set model to OpenCode Go · kimi-k3.1-pro`. `What word did I ask you to remember?` → `⏺ PELICAN` (routed, conversation kept).
+1. Session start: the settings file gained 38 `modelPicker.options` rows, `replaceBuiltInOptions` stayed unset, and no other key changed.
+2. `/model opencode-go/kimi-k3.1-pro` → `⎿ Set model to OpenCode Go · kimi-k3.1-pro and saved as your default for new sessions` in the same first session (H7 fixed). `Remember the word PELICAN. Reply only OK.` → `⏺ OK`.
+3. `/model` → `│ [ All models (43) ]  Type to search ⏎ submit │ … │ [ opencode-go/kimi-k3.1-pro ✓  18t/s ] │ … │ [ fakelocal/fake-small ⊘ context>20k  20k ] │`.
+4. `g l m`, Esc → `All models (43)  Type to search ⏎ submit`. Then `k i m i` → `│ [ All models (4) ]  kimi  ⏎ submit │`, and the main prompt stayed empty (H6 fixed for the search field).
+5. ↓×4 to `kimi-k3` → detail `Kimi K3 · 1.049m ctx · 131k out · $3/15 per M · reasoning · vision`. Esc cleared the search, and a second Esc closed the hub.
+6. `/model`, `f a k e`, ↓, Enter → the pane drew `Kept opencode-go/kimi-k3.1-pro: this conversation is larger than fakelocal/fake-small's window.` with a toast, and the model was unchanged. Esc cleared the search. `o p u s` then landed in the main prompt (`❯ opus`) (H8).
+7. Controlled repro A: `/model`, `g l m`, Esc, wait 3 s, `h a i` → `│ [ All models (1) ]  hai  ⏎ submit │`, main prompt `❯` empty.
+8. Controlled repro B: `g l m`, ↓, Esc, wait 3 s, `h a i` → hub `All models (43)  Type to search` (no `⏎ submit`), main prompt `❯ hai`. Repeated with `q w e n`, ↓↓, Esc, wait 4 s, `z` → `❯ z`. The prompt was cleared with ctrl+u each time and nothing was submitted.
+9. `/model`, `o p u s`, ↓, Enter → host `Switch model?` → Yes → `❯ /model opus ⎿ Set model to Opus 5.5`. `What word did I ask you to remember?` → `⏺ PELICAN`.
+10. `/model`, `k i m i`, ↓, Enter → host `Switch model?` → Yes → `❯ /model opencode-go/kimi-k3.1-pro ⎿ Set model to OpenCode Go · kimi-k3.1-pro`. The same question → `⏺ PELICAN` (routed, conversation kept).
+11. `/model`, `x a i`, Tab, Enter → the locked xAI view. Enter → the in-pane key prompt. No key was typed. Esc → `⏺ nmg-router: Login cancelled.` and the locked view. Enter → the key prompt again, so the hub kept the keyboard. Esc, Esc, Esc closed it.
 
-The tab was closed with `herdr tab close`.
+The session was ended with `/exit`, and the tab was closed with `herdr tab close`.
 
 ---
 
@@ -105,13 +105,13 @@ The tab was closed with `herdr tab close`.
 |------|-------------|--------|-------|
 | T001 | Formatting, version order, recent use, Claude lineup | Complete | Verified live through rows and the detail line |
 | T002 | Hub sources and pure state | Complete | |
-| T003 | Hub view | Complete | In-pane notice and pluralized count added in `dfa5b72` |
-| T004 | Hub controller and model command | Incomplete | H6: the Esc-clear path drops the hub's keyboard focus. H4 and H5 are fixed |
-| T005 | Settings-row sync and catalog listener | Incomplete | H7: rows written after host startup are not usable until the next session |
+| T003 | Hub view | Complete | |
+| T004 | Hub controller and model command | Incomplete | H8: Esc-clear with a row highlighted drops the hub's keyboard. The search-field and login-cancel cases are fixed |
+| T005 | Settings-row sync and catalog listener | Complete | `loaded()`/rewrite makes core take the rows in the first session |
 | T006 | Hook wiring | Complete | |
-| T007 | Fake engine extensions | Complete | Now models `holdToasts` and a press's asked window. It does not model the pane losing keys after a denied Esc close, or the host reading `modelPicker` only at startup |
-| T008 | Hub tests | Complete | Do not cover H6 |
-| T009 | Settings-row tests | Complete | Do not cover H7 |
+| T007 | Fake engine extensions | Complete | Models which site holds the keyboard. It does not model Esc dropping the keyboard when the ring is on a row button |
+| T008 | Hub tests | Complete | The Esc test covers only the ring on the search field |
+| T009 | Settings-row tests | Complete | Cover rewrite on an unloaded row |
 
 ---
 
@@ -121,38 +121,38 @@ The tab was closed with `herdr tab close`.
 
 | Principle | Score (1-5) | Notes |
 |-----------|-------------|-------|
-| Single Responsibility | 4 | The view model, view, controller, sources and settings sync stay separate. The login pane controller is reused through a narrow `PaneSite` |
-| Open/Closed | 4 | `HubSource` lets the Claude and catalog sources plug in. A `lent` site extends the login pane without forking it |
+| Single Responsibility | 4 | The view model, view, controller, sources and settings sync stay separate. Row-load confirmation sits with the settings sync |
+| Open/Closed | 4 | `HubSource` takes new sources. `rowLoaded` is injected into `handleModelCommand` with a default |
 | Liskov Substitution | 4 | Both sources satisfy `HubSource` |
-| Interface Segregation | 4 | `HubHost` and `SettingsHost` are narrow ports |
-| Dependency Inversion | 4 | `src/` never touches `$`; `hooks/register.ts` builds the ports |
+| Interface Segregation | 4 | `HubHost` and `SettingsHost` pick only `settings` and `clock` from `HostPort` |
+| Dependency Inversion | 4 | `src/` never touches `$`. `hooks/register.ts` builds the ports, including `$.settings.read({ source: "user" })` |
 
 ### Security — 4
-No credential is written. The settings rows hold only the model id, label and a context/price description. Model ids go to `$.command.run` args, never to a shell. No credential was typed in the run, and the settings file was restored afterwards.
+No credential is written. The rows hold only model id, label and a context/price description. Model ids go to `$.command.run` args, never to a shell. No credential was typed in the run, and the settings file was restored afterwards.
 
 ### Performance — 4
-The `session.start` sync reads the cached catalog with no network call, and it writes only on change. Each provider refreshes once per session.
+The row confirmation polls `$.settings.read` every 250 ms for up to 2 s, with at most two rewrites. That stays under 10 s, so it fits the hook budget, and it runs only when core has not loaded the row. In the live first session the switch had no visible delay.
 
 ### Testability — 3
-Pure state and view functions are well covered, and the fakes now model `holdToasts` and asked windows. The two new defects come from host behavior the fakes do not model: the pane losing keys after a denied Esc close, and `modelPicker` being read only at startup.
+Pure state, view and settings logic are well covered, and the fake engine now tracks which site holds the keyboard. The remaining defect comes from host keyboard handling that the fake does not reproduce: Esc with the ring on a row button.
 
 ### Error Handling — 4
-A refused pick and a cancelled login both give visible feedback in place. A first-session switch to a routed id fails with core's bare `not found`, which gives no hint that a restart is needed (H7).
+Refused picks and cancelled logins give feedback in place. A switch whose row never loads logs `Claude Code has not loaded <id>'s model picker row yet.` and still passes to core.
 
 ---
 
 ## Test Results
 
 - `npm run typecheck`: pass
-- `npm test`: 508 tests pass
+- `npm test`: 516 tests pass
 - `claude plugin validate .`: pass
-- Interactive herdr run: Fail (H6, H7)
+- Interactive herdr run: Fail (H8)
 
 ---
 
 ## Fixes Applied
 
-None. This verify publication scope allows writes only to `verification-report.md`, so the findings go back to implementation diagnosis. The previous run's H4, H5 and L2 were fixed by `dfa5b72` and confirmed live in this run.
+None. This verify publication scope allows writes only to `verification-report.md`, so the finding goes back to implementation diagnosis. The previous run's H7 is fixed and H6 is fixed for the search-field and login-cancel cases, both confirmed live in this run.
 
 ---
 
@@ -160,13 +160,12 @@ None. This verify publication scope allows writes only to `verification-report.m
 
 | ID | Severity | AC | Finding | Suggested direction |
 |----|----------|----|---------|---------------------|
-| H6 | High | AC6 | After Esc clears a non-empty search, the hub pane loses keyboard focus to the main prompt. Typing goes into the prompt, and ↑ recalls history. `refusesClose` in `src/hub/hub-controller.ts:255-258` redraws after `withQuery(state, "")` but never calls `keepRing()`, while the login-cancel branch at `:248-253` does. | Call `keepRing()` after the redraw in the search branch, so the ring returns to the search field and the pane asks for the keys again. Add a fake-engine rule that a denied person close releases the pane's keys, and test that typing after Esc reaches the search. |
-| H7 | High | AC4, AC8 (and AC5 after login) | Claude Code reads `modelPicker` at startup only. Rows that `session.start` or a catalog refresh writes during a session are rejected by core `/model` (`Model '<id>' not found`) until the next session. This contradicts the `hooks/register.ts:317-318` comment. | Find a host path that makes a routed id known in the current session (for example a settings reload API, writing the rows before core reads settings, or `behavesAs`/alias handling in the `command.run` hook). If the host offers none, tell the person to restart when new rows are written, and amend the spec to match. Rerun the first-session switch live. |
+| H8 | High | AC6 | With a row highlighted, Esc clears the search and keeps the pane, but the hub loses the keyboard: typing goes into the main prompt. `regainKeys()` (`src/hub/hub-controller.ts:76`) calls `keepRing()`, which puts the ring back on the remembered row key (`:69`). With the ring on the search field the same path works, so the row-button case is what fails. | On Esc-clear, move the ring to the search field, since the cleared query is where typing goes. Then confirm live whether `ui.open` regains the keys when a row held the ring. Add a fake-engine case and a test that highlight a row, press Esc, and expect the next letters in the search. Rerun live with ↓ before Esc. |
 | L1 | Low | AC1 | Dimming of locked entries cannot be confirmed from a plain-text screen read. | No change needed if the host renders `dimColor` on buttons. |
 
 ---
 
 ## Recommendations
 
-1. Fix H6 and H7, then rerun the full registered gate and the herdr procedure at a width below 110 columns. Start from a settings file with no `modelPicker` rows, so the first-session switch is covered. Type after an Esc-clear to confirm the hub keeps focus.
-2. The xAI reopen after a successful login still needs the user's own key. Once H7 is fixed, it should also confirm that `xai/grok-4.6` can be picked in that same session.
+1. Fix H8, then rerun the full registered gate and the herdr procedure. Include an Esc-clear with a row highlighted, and one after a refused over-window pick.
+2. The xAI reopen after a successful login still needs the user's own key. It should also confirm that `xai/grok-4.6` can be picked in that same session.

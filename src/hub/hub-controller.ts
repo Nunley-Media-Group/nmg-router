@@ -257,6 +257,9 @@ export function createHubController(services: Services): HubController {
       }
       if (state === undefined || origin.kind !== "person" || state.query === "") return false;
       state = withQuery(state, "", sources, recent);
+      // Printable keys reach a pane only while an Input holds its ring, so the cleared
+      // search, not a row the ring rested on, is where the letters typed next go.
+      ring = "search";
       redraw();
       regainKeys();
       return true;

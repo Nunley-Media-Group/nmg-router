@@ -145,6 +145,21 @@ describe("/model with no arguments", () => {
     expect(h.engine.recorded.paneCloses).toEqual([]);
   });
 
+  // Printable keys reach a pane only while an Input holds its ring, so a ring put back
+  // on a highlighted row would send the letters typed after Esc to the prompt.
+  it("puts the ring on the search field after Esc clears a search with a row highlighted", async () => {
+    const h = await hubHarness({ columns: 91 });
+    await openBare(h);
+    keyed(tree(h), "search")?.props.onInput?.("kimi");
+    h.hub.focused("row:opencode-go/kimi-k3.1-pro");
+    h.engine.dropKeys();
+    expect(h.hub.refusesClose({ kind: "person" })).toBe(true);
+    await settle();
+    expect(h.engine.keyboard()).toBe(HUB_PANE_ID);
+    expect(h.engine.recorded.focus.at(-1)).toBe("search");
+    expect(keyed(tree(h), "row:opencode-go/kimi-k3.1-pro")).toBeDefined();
+  });
+
   it("switches to a routed pick through /model, after closing the hub", async () => {
     const h = await hubHarness();
     await openBare(h);
