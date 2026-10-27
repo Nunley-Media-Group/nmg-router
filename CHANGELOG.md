@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-27
+
+### Changed
+
+- Replace /model with an oh-my-pi-style model hub (#5)
+
 ## [0.8.0] - 2026-10-26
 
 ### Changed
