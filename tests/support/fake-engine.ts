@@ -12,7 +12,6 @@ import type {
   ToolInfo,
 } from "claude-code";
 import type { ApiMessageInput } from "../../src/translate/messages.ts";
-import { settingsPath } from "../../src/hub/settings-rows.ts";
 
 export type FakePlatform = "macos" | "windows" | "linux" | "other";
 
@@ -55,6 +54,9 @@ export type FakeOptions = {
   readonly tools?: readonly ToolInfo[];
   // The plugin's directory. Its manifest is read from `files`.
   readonly pluginRoot?: string;
+  // How many writes to the user settings file the host's watcher misses, as one made
+  // before the watcher starts or folded into the echo of the host's own write is.
+  readonly missedSettingsWrites?: number;
 };
 
 // A scripted child: stdout pieces in order, then an exit code. `hang` keeps it
@@ -205,6 +207,14 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
   const env: Record<string, string | undefined> = { ...defaultEnv(options.platform), ...options.env };
   const files = new Map<string, string>(Object.entries(options.files ?? {}));
   const kv = new Map<string, unknown>();
+  // The user settings file as the host loaded it, and the writes its watcher has yet to miss.
+  const separator = options.platform === "windows" ? "\\" : "/";
+  const userSettingsPath =
+    env.CLAUDE_CONFIG_DIR !== undefined && env.CLAUDE_CONFIG_DIR !== ""
+      ? `${env.CLAUDE_CONFIG_DIR}${separator}settings.json`
+      : `${env[options.platform === "windows" ? "USERPROFILE" : "HOME"] ?? ""}${separator}.claude${separator}settings.json`;
+  let loadedUserSettings = files.get(userSettingsPath);
+  let settingsWritesToMiss = options.missedSettingsWrites ?? 0;
   const columns = options.columns ?? 200;
   let askingDepth = 0;
   const askedPanes = new Set<string>();
@@ -304,6 +314,10 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       },
       write: async (path: string, text: string) => {
         files.set(path, text);
+        if (path === userSettingsPath) {
+          if (settingsWritesToMiss > 0) settingsWritesToMiss -= 1;
+          else loadedUserSettings = text;
+        }
         recorded.fsWrites.push({ path, text });
         recorded.events.push(`write:${path}`);
       },
@@ -345,8 +359,10 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       },
       keys: async () => [...kv.keys()],
     },
+    // The user source answers what the host loaded, which lags a write its watcher missed.
     settings: {
-      read: async () => ({}),
+      read: async (args?: { source?: string }) =>
+        args?.source === "user" && loadedUserSettings !== undefined ? (JSON.parse(loadedUserSettings) as unknown) : {},
     },
     session: {
       id: async () => options.session?.id ?? "session-test",
@@ -468,15 +484,14 @@ type Hook = (engine: unknown, input: unknown, next: (input: unknown) => unknown)
 type RecordedHook = { readonly event: string; readonly matcher: Readonly<Record<string, unknown>> | undefined; readonly run: Hook };
 
 // Core's own `/model <id>`, as the host checks it: a built-in alias or a Claude id is
-// taken, and any other id only while a `modelPicker.options` row in the user's settings
-// names it. Every other event ends in `{}`.
+// taken, and any other id only while a `modelPicker.options` row in the user settings
+// the host has loaded names it. Every other event ends in `{}`.
 const BUILT_IN_MODELS = new Set(["default", "opus", "sonnet", "haiku", "fable"]);
 
 async function coreModelCommand(engine: FakeEngine, id: string): Promise<unknown> {
   if (id === "" || BUILT_IN_MODELS.has(id) || id.includes("claude")) return {};
-  const path = await settingsPath(engine, "linux");
-  const text = path !== undefined && (await engine.fs.exists(path)) ? await engine.fs.read(path) : "{}";
-  const options = (JSON.parse(text) as { modelPicker?: { options?: { model?: string }[] } }).modelPicker?.options ?? [];
+  const loaded = (await engine.settings.read({ source: "user" })) as { modelPicker?: { options?: { model?: string }[] } };
+  const options = loaded.modelPicker?.options ?? [];
   if (options.some((row) => row.model === id)) return {};
   return { text: `Model '${id}' not found` };
 }
@@ -528,5 +543,12 @@ export function recordHooks(engine: FakeEngine): {
     return (await dispatch("command.run", run)) as Awaited<ReturnType<typeof engine.command.run>>;
   };
 
-  return { on, dispatch };
+  // A person's close is their Escape, which hands the keyboard back to the prompt
+  // before the hooks hear it, so a pane that refuses the close no longer holds it.
+  const dispatchEvent = (event: string, input: unknown): unknown => {
+    if (event === "ui.close" && (input as { origin?: { kind?: string } }).origin?.kind === "person") engine.dropKeys();
+    return dispatch(event, input);
+  };
+
+  return { on, dispatch: dispatchEvent };
 }

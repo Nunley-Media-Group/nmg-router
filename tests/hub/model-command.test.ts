@@ -36,6 +36,28 @@ describe("/model with arguments", () => {
     expect(h.engine.recorded.panes).toEqual([]);
     expect(await h.engine.store.get("models.recent")).toMatchObject({ opus: expect.any(Number) });
   });
+
+  // Core's /model refuses a routed id until Claude Code has loaded its settings row.
+  it("waits for the id's settings row to be loaded before core's /model runs", async () => {
+    const h = await hubHarness();
+    const order: string[] = [];
+    const rowLoaded = vi.fn(async () => (order.push("loaded"), true));
+    const next = vi.fn(async () => (order.push("core"), {}));
+    await handleModelCommand(h.host, input(" opencode-go/kimi-k3.1-pro "), next, h.hub, rowLoaded);
+    expect(rowLoaded).toHaveBeenCalledWith("opencode-go/kimi-k3.1-pro");
+    expect(order).toEqual(["loaded", "core"]);
+    expect(h.engine.recorded.ui).toEqual([]);
+  });
+
+  it("still runs core's /model when the row never loads, and says so", async () => {
+    const h = await hubHarness();
+    const next = vi.fn(async () => ({}));
+    await handleModelCommand(h.host, input("opencode-go/kimi-k3.1-pro"), next, h.hub, async () => false);
+    expect(next).toHaveBeenCalledOnce();
+    expect(h.engine.recorded.ui).toEqual([
+      "nmg-router: Claude Code has not loaded opencode-go/kimi-k3.1-pro's model picker row yet.",
+    ]);
+  });
 });
 
 describe("/model with no arguments", () => {
@@ -106,6 +128,21 @@ describe("/model with no arguments", () => {
     expect(h.hub.refusesClose({ kind: "person" })).toBe(true);
     expect(keyed(tree(h), "search")?.props.value).toBe("");
     expect(h.hub.refusesClose({ kind: "person" })).toBe(false);
+  });
+
+  // Escape hands the keyboard to the prompt before the hub refuses the close, so the
+  // letters typed next would land in the prompt unless the hub asks for the keys again.
+  it("takes the keyboard back after Esc clears a search, with the ring on the search field", async () => {
+    const h = await hubHarness({ columns: 91 });
+    await openBare(h);
+    keyed(tree(h), "search")?.props.onInput?.("glm");
+    h.engine.dropKeys();
+    expect(h.hub.refusesClose({ kind: "person" })).toBe(true);
+    await settle();
+    expect(h.engine.keyboard()).toBe(HUB_PANE_ID);
+    expect(h.engine.recorded.focus.at(-1)).toBe("search");
+    expect(h.engine.recorded.panes.every((pane) => pane.id === HUB_PANE_ID && pane.focus === true)).toBe(true);
+    expect(h.engine.recorded.paneCloses).toEqual([]);
   });
 
   it("switches to a routed pick through /model, after closing the hub", async () => {
@@ -185,10 +222,13 @@ describe("/model with no arguments", () => {
     expect(h.engine.keyboard()).toBe(HUB_PANE_ID);
     expect(h.engine.recorded.focus.at(-1)).toBe("secret");
 
+    h.engine.dropKeys();
     expect(h.hub.refusesClose({ kind: "person" })).toBe(true);
     await settle();
     expect(h.engine.recorded.ui).toContain("Login cancelled.");
     expect(textOf(tree(h))).toContain("xAI has no credentials.");
+    expect(h.engine.keyboard()).toBe(HUB_PANE_ID);
+    expect(h.engine.recorded.focus.at(-1)).toBe("login");
     expect(h.engine.recorded.paneCloses).toEqual([]);
   });
 });

@@ -37,6 +37,7 @@ export function routerHostOf(engine: FakeEngine): RouterHost {
     fs: engine.fs,
     http: engine.http,
     store: engine.store as unknown as RouterHost["store"],
+    settings: engine.settings,
     process: surface.process,
     ui: surface.ui,
     session: surface.session,

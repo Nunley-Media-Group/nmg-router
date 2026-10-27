@@ -34,6 +34,11 @@ export type HostPort = {
     set(key: string, value: unknown): Promise<void>;
     delete(key: string): Promise<void>;
   };
+  // The user settings as Claude Code has loaded them, which lag the file until its watcher reloads it.
+  readonly settings: {
+    read(args: { readonly source: "user" }): Promise<unknown>;
+  };
+  readonly clock: { after(ms: number, fn: () => void): unknown };
   readonly ui: {
     log(text: string, options?: { readonly to: "debug" }): void;
     open(args: PaneOpenArgs): Promise<UiOpenResult>;

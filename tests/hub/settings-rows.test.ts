@@ -103,6 +103,61 @@ describe("settings rows", () => {
   });
 });
 
+// Claude Code's watcher can miss a write: one before it starts, or one folded into the
+// echo of the host's own write. Core's /model reads only what the host has loaded.
+describe("rows Claude Code has loaded", () => {
+  const KIMI_ID = "opencode-go/kimi-k3.1-pro";
+  const loadedModels = async (engine: ReturnType<typeof fakeEngine>): Promise<string[]> => {
+    const user = (await engine.settings.read({ source: "user" })) as { modelPicker?: { options?: { model: string }[] } };
+    return (user.modelPicker?.options ?? []).map((row) => row.model);
+  };
+
+  it("writes the file again when the host missed the write, until the host has loaded the rows", async () => {
+    const engine = fakeEngine({ platform: "linux", missedSettingsWrites: 1 });
+    const rows = createSettingsRows(engine, { platform: async () => "linux", catalog });
+    await rows.sync();
+    expect(await loadedModels(engine)).toEqual([]);
+
+    expect(await rows.loaded(KIMI_ID)).toBe(true);
+    expect(engine.recorded.fsWrites).toHaveLength(2);
+    expect(engine.recorded.fsWrites[1]?.text).toBe(engine.recorded.fsWrites[0]?.text);
+    expect(await loadedModels(engine)).toContain(KIMI_ID);
+  });
+
+  it("writes nothing more when the host has loaded the rows, or for an id with no mod row", async () => {
+    const engine = fakeEngine({ platform: "linux" });
+    const rows = createSettingsRows(engine, { platform: async () => "linux", catalog });
+    await rows.sync();
+    expect(await rows.loaded()).toBe(true);
+    expect(await rows.loaded(KIMI_ID)).toBe(true);
+    expect(await rows.loaded("opus")).toBe(true);
+    expect(engine.recorded.fsWrites).toHaveLength(1);
+  });
+
+  it("stops after two rewrites the host never loads, and says the row is not loaded", async () => {
+    const engine = fakeEngine({ platform: "linux", missedSettingsWrites: 10 });
+    const rows = createSettingsRows(engine, { platform: async () => "linux", catalog });
+    await rows.sync();
+    expect(await rows.loaded(KIMI_ID)).toBe(false);
+    expect(engine.recorded.fsWrites).toHaveLength(3);
+  });
+
+  it("keeps a change the user made to the file since the sync when it writes the rows again", async () => {
+    // The host misses both the sync's write and the user's edit.
+    const engine = fakeEngine({ platform: "linux", missedSettingsWrites: 2 });
+    const rows = createSettingsRows(engine, { platform: async () => "linux", catalog });
+    await rows.sync();
+    const synced = JSON.parse(writtenText(engine, PATH) ?? "") as Record<string, unknown>;
+    await engine.fs.write(PATH, JSON.stringify({ ...synced, theme: "light" }));
+
+    expect(await rows.loaded(KIMI_ID)).toBe(true);
+    expect(engine.recorded.fsWrites).toHaveLength(3);
+    const doc = JSON.parse(writtenText(engine, PATH) ?? "");
+    expect(doc.theme).toBe("light");
+    expect(doc.modelPicker.options.map((row: { model: string }) => row.model)).toContain(KIMI_ID);
+  });
+});
+
 describe("settings path", () => {
   it("honours CLAUDE_CONFIG_DIR, then HOME, and uses USERPROFILE on Windows", async () => {
     expect(await settingsPath(fakeEngine({ platform: "linux", env: { CLAUDE_CONFIG_DIR: "/cfg" } }), "linux")).toBe(
@@ -155,7 +210,7 @@ describe("catalog listener", () => {
     const listener = vi.fn();
     stub.onChange(listener);
 
-    await watchModelPickerRows(stub, engine, async () => "linux")();
+    await watchModelPickerRows(stub, engine, async () => "linux").start();
 
     expect(listener).not.toHaveBeenCalled();
     expect(engine.recorded.http).toEqual([]);

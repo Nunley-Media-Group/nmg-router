@@ -19,9 +19,10 @@ import { hubSources, type HubRow, type HubSource } from "./sources.ts";
 
 export const HUB_PANE_ID = "nmg-router-models";
 const HUB_TITLE = "Models";
+const HUB_OPEN = { id: HUB_PANE_ID, title: HUB_TITLE, focus: true, closeOnEscape: true } as const;
 const SPEED_KEY = "metrics.speed";
 
-export type HubHost = Pick<HostPort, "env" | "fs" | "http" | "process" | "store"> & {
+export type HubHost = Pick<HostPort, "clock" | "env" | "fs" | "http" | "process" | "settings" | "store"> & {
   readonly ui: HostPort["ui"] & { toast(text: string): void };
   readonly session: {
     model(): Promise<string>;
@@ -67,6 +68,13 @@ export function createHubController(services: Services): HubController {
     const keys = focusableKeys(view);
     const key = view.mode === "locked" ? "login" : ring !== undefined && keys.includes(ring) ? ring : "search";
     current.ui.focus({ requestId: HUB_PANE_ID, key }).catch(() => undefined);
+  }
+
+  // Escape hands the keyboard back to the prompt before a refused close keeps the pane,
+  // and the ring cannot move in a site without it. Opening the open hub again asks for
+  // the keys, which the idle, empty prompt gives, and the ring then goes back in place.
+  function regainKeys(): void {
+    host?.ui.open(HUB_OPEN).then(keepRing, () => undefined);
   }
 
   function patch(changes: Partial<HubState>): void {
@@ -137,12 +145,7 @@ export function createHubController(services: Services): HubController {
         contextTokens: await contextOf(current),
       };
       const next = withScope(base, scope, sources);
-      const opened = await current.ui.open({
-        id: HUB_PANE_ID,
-        title: HUB_TITLE,
-        focus: true,
-        closeOnEscape: true,
-      });
+      const opened = await current.ui.open(HUB_OPEN);
       if (!opened.isPlaced) {
         current.ui.log(`The model hub could not be shown: ${opened.reason}`);
         return;
@@ -249,12 +252,13 @@ export function createHubController(services: Services): HubController {
         // Esc during the login cancels it and returns to the hub.
         loginPane.closedByHost();
         redraw();
-        keepRing();
+        regainKeys();
         return true;
       }
       if (state === undefined || origin.kind !== "person" || state.query === "") return false;
       state = withQuery(state, "", sources, recent);
       redraw();
+      regainKeys();
       return true;
     },
   };

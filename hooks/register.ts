@@ -13,7 +13,7 @@ import { createModeReader, type PermissionMode } from "../src/permissions/mode.t
 import { checkFailed, checkRoutedTool, type ToolCheckDeps } from "../src/permissions/tool-check.ts";
 import { createHubController, HUB_PANE_ID, type HubController, type HubHost } from "../src/hub/hub-controller.ts";
 import { handleModelCommand } from "../src/hub/model-command.ts";
-import { watchModelPickerRows } from "../src/hub/settings-rows.ts";
+import { watchModelPickerRows, type ModelPickerRowsWatch } from "../src/hub/settings-rows.ts";
 import { createComposeCapture } from "../src/routing/compose-capture.ts";
 import { createRouter, type Router, type RouterHost } from "../src/routing/router.ts";
 import { createSessionTracker } from "../src/routing/session-tracker.ts";
@@ -145,6 +145,7 @@ function hostPort($: EngineInterface): RouterHost {
       cwd: () => $.session.cwd(),
       authorize: () => $.session.authorize(),
     },
+    settings: { read: () => $.settings.read({ source: "user" }) },
     model: { classify: (text, labels) => $.model.classify(text, labels) },
     config: { list: () => $.config.list() },
     clock: { after: (ms, fn) => $.clock.after(ms, fn) },
@@ -164,6 +165,8 @@ function hubHost($: EngineInterface): HubHost {
     http: port.http,
     process: port.process,
     store: port.store,
+    settings: port.settings,
+    clock: port.clock,
     ui: { ...port.ui, toast: (text) => $.ui.toast(text) },
     session: {
       model: () => $.session.model(),
@@ -189,11 +192,11 @@ export const register: Register = (on, options) => {
   // One services set per engine, shared by the login hooks and the model hub, so a
   // catalog refresh from either one also syncs the model picker rows in settings.json.
   let shared: Services | undefined;
-  let syncModelPickerRows: (() => Promise<void>) | undefined;
+  let modelPickerRows: ModelPickerRowsWatch | undefined;
   const servicesFor = (host: HostPort): Services => {
     if (shared !== undefined) return shared;
     const services = createServices(host, { pane });
-    syncModelPickerRows = watchModelPickerRows(services.catalog, host, services.platform);
+    modelPickerRows = watchModelPickerRows(services.catalog, host, services.platform);
     shared = services;
     return services;
   };
@@ -315,17 +318,19 @@ export const register: Register = (on, options) => {
   });
 
   // The model picker rows are written from the cached catalog as the session starts,
-  // so Claude Code's own /model knows each routed id before the first pick.
+  // so Claude Code's own /model knows each routed id before the first pick; a routed
+  // `/model <id>` still waits until Claude Code has loaded that id's row.
   on("session.start", async ($, e, next) => {
     servicesFor(hostPort($));
-    await syncModelPickerRows?.();
+    await modelPickerRows?.start();
     return next(e);
   });
 
   // `/model` with no arguments opens the hub; with one, it switches through core's own /model.
   on("command.run", { command: "model" }, ($, e, next) => {
     const host = hubHost($);
-    return handleModelCommand(host, e, next, hubFor(host));
+    const rowLoaded = (model: string): Promise<boolean> => modelPickerRows?.loaded(model) ?? Promise.resolve(true);
+    return handleModelCommand(host, e, next, hubFor(host), rowLoaded);
   });
 
   on("ui.render", { component: "Pane", requestId: HUB_PANE_ID }, ($, e, next) => {
