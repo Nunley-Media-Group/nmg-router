@@ -1,0 +1,39 @@
+**Issue**: #31
+**Date**: 2026-10-27
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/5-replace-model-with-an-oh-my-pi-style-model-hub/
+
+# File: tests/features/model-hub.feature
+# Generated from: specs/31-fix-clinepass-http-400-on-paid-models-and-arrow-key-navigation-in-the-model-hub/requirements.md
+Feature: ClinePass requests name listed ids, and the hub navigates with the arrows
+
+  @SCN001 @regression
+  Scenario: A paid ClinePass model is requested with its listed id
+    Given a ClinePass login and a catalog entry "cline-pass/qwen3.7-plus" cached with the model "qwen3.7-plus"
+    When a routed step runs on "cline-pass/qwen3.7-plus"
+    Then the request names "cline-pass/qwen3.7-plus"
+
+  @SCN002 @regression
+  Scenario: A free ClinePass model is requested as listed
+    Given a ClinePass catalog entry "cline-pass/cline-free/solar-mini4"
+    When a routed step runs on it
+    Then the request names "cline-free/solar-mini4"
+
+  @SCN003 @regression
+  Scenario: The arrows move through the models
+    Given the hub is open
+    When the person presses down and then left
+    Then the models selection moves, the pane does not scroll, and the session stays where it is
+
+  @SCN004 @regression
+  Scenario: The providers stay visible and selectable
+    Given the hub was scrolled and closed
+    When the person opens the hub again, presses Tab, chooses "OpenCode Go" and presses Enter
+    Then every provider shows in the sidebar, the models list shows OpenCode Go's models, and the ring is on the models
+
+  @SCN005 @regression
+  Scenario: Enter switches to the chosen model
+    Given "haiku" is selected in the models list
+    When the person presses Enter
+    Then the hub closes and "/model haiku" runs
