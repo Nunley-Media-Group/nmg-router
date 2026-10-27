@@ -84,7 +84,7 @@ export function createAutoTrigger(deps: TriggerDeps): AutoTrigger {
         const info = await deps.describe(model);
         if (info.contextWindow === undefined || !shouldCompact(deps.tracker.contextTokens(MAIN_LOOP), info.contextWindow)) return;
         // The turn is still ending here, so the summary waits for the clock. It is
-        // pending from now, so a step that starts first waits for it.
+        // pending from now, so no second summary starts while it runs.
         deps.view.hold(
           MAIN_LOOP,
           new Promise<void>((resolve) => {

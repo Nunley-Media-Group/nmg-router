@@ -248,7 +248,7 @@ describe("the summary deadline", () => {
     expect(SUMMARY_TIMEOUT_MS).toBe(120000);
   });
 
-  it("aborts a summary that the curl child never finishes, and the waiting routed step then answers", async () => {
+  it("aborts a summary that the curl child never finishes, and routed steps answer before and after the deadline", async () => {
     let children = 0;
     const h = harness(
       {
@@ -271,13 +271,20 @@ describe("the summary deadline", () => {
     expect(deps.timers.map((timer) => timer.ms)).toEqual([SUMMARY_TIMEOUT_MS]);
     expect(h.view.pending(MAIN_LOOP)).toBeDefined();
 
+    // AC6: a routed main-loop step answers while the stalled summary is still pending, before the deadline.
+    const early = await collect(routeStep(h.router, step(0), spyNext()));
+    expect(textOf(early.chunks)).toBe("Answer.");
+    expect(h.view.pending(MAIN_LOOP)).toBeDefined();
+    // The early step's own usage is the context from here, and the timeout must leave it as it is.
+    const context = h.tracker.contextTokens(MAIN_LOOP);
+
     deps.timers[0]?.fn();
     await tick();
 
     expect(h.engine.recorded.events).toContain("child:killed");
     expect(deps.logs).toEqual([TIMED_OUT]);
     expect(h.view.get(MAIN_LOOP)).toEqual({ summary: "Kept.", model: MODEL, cut: 0 });
-    expect(h.tracker.contextTokens(MAIN_LOOP)).toBe(120000);
+    expect(h.tracker.contextTokens(MAIN_LOOP)).toBe(context);
     expect(h.view.pending(MAIN_LOOP)).toBeUndefined();
 
     const routed = await collect(routeStep(h.router, step(1), spyNext()));

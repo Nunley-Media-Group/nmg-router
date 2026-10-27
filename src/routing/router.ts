@@ -230,19 +230,6 @@ type Reply = {
   readonly firstAt: number | undefined;
 };
 
-// Waits for the loop's pending in-place summary, or until the step is abandoned.
-function settled(pending: Promise<void> | undefined, signal: AbortSignal): Promise<void> | undefined {
-  if (pending === undefined || signal.aborted) return undefined;
-  return new Promise((resolve) => {
-    const done = (): void => {
-      signal.removeEventListener("abort", done);
-      resolve();
-    };
-    signal.addEventListener("abort", done, { once: true });
-    void pending.then(done);
-  });
-}
-
 export function createRouter(
   host: RouterHost,
   capture: ComposeCapture,
@@ -423,8 +410,7 @@ export function createRouter(
     const captured = capture.get(e.model);
     const system = captured?.system ?? (await systemFor(e.model));
     const listing = await host.tool.list();
-    // Only the main loop has a view; a summary still running is waited for first.
-    if (e.agentId === undefined) await settled(view.pending(MAIN_LOOP), signal);
+    // Never waits for a running summary: the wait would count against the turn.step hook's 10-second budget.
     const transcript = await host.session.messages({ agentId: e.agentId });
     if (!Array.isArray(transcript)) throw classify(name, { kind: "named", error: "unreadable_context" });
     const messages = e.agentId === undefined ? view.apply(MAIN_LOOP, transcript) : transcript;
