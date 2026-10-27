@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-27
+
+### Fixed
+
+- Name ClinePass models by their model, not their id, in the picker and status line (#33)
+
 ## [0.10.2] - 2026-10-27
 
 ### Fixed
