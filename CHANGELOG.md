@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-27
+
+### Fixed
+
+- Bound the routed in-place summary and clear the routed status line on Claude steps (#26)
+
 ## [0.10.0] - 2026-10-27
 
 ### Changed
