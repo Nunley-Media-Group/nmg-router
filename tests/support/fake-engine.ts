@@ -44,6 +44,9 @@ export type FakeOptions = {
   // 2.1.310, the call skips the calling plugin's own `session.compact` hook and
   // runs core's summarizer, which `recorded.coreSummaries` counts.
   readonly compact?: unknown;
+  // The live context window's tokens and size, as `$.session.usage()` answers them.
+  readonly contextTokens?: number;
+  readonly contextWindow?: number;
   // What `$.ui.ask` answers: a label, an Error it rejects with (a dismissed
   // dialog, or nobody to ask), or a function of the question giving either.
   readonly ask?: string | Error | ((question: string) => string | Error | Promise<string | Error>);
@@ -51,6 +54,9 @@ export type FakeOptions = {
   readonly tools?: readonly ToolInfo[];
   // The plugin's directory. Its manifest is read from `files`.
   readonly pluginRoot?: string;
+  // How many writes to the user settings file the host's watcher misses, as one made
+  // before the watcher starts or folded into the echo of the host's own write is.
+  readonly missedSettingsWrites?: number;
 };
 
 // A scripted child: stdout pieces in order, then an exit code. `hang` keeps it
@@ -78,7 +84,12 @@ export type FakeHttpReply = {
 
 export type FakeHttpResponder = (request: FakeHttpRequest) => FakeHttpReply | undefined;
 
-export type FakePaneOpen = { readonly id: string; readonly title?: string; readonly focus?: boolean };
+export type FakePaneOpen = {
+  readonly id: string;
+  readonly title?: string;
+  readonly focus?: boolean;
+  readonly holdToasts?: boolean;
+};
 
 export type RecordedProcess = {
   readonly argv: string[];
@@ -93,6 +104,10 @@ export type Recorded = {
   readonly storeWrites: { key: string; value: unknown }[];
   readonly settingsWrites: unknown[];
   readonly ui: string[];
+  // Each `$.ui.toast` text, in order.
+  readonly toasts: string[];
+  // The toasts raised while an open pane holds them (`holdToasts`), so none was drawn.
+  readonly heldToasts: string[];
   readonly panes: FakePaneOpen[];
   readonly paneCloses: string[];
   // Each element key the mod moved a pane's focus ring onto.
@@ -125,6 +140,9 @@ export type FakeEngine = Pick<
   // Runs a hook as the engine runs one for the person's command: a pane opened
   // before it settles is asked, and is placed at any width.
   asking<T>(run: () => T | Promise<T>): Promise<T>;
+  // Runs a press handler as the engine runs a person's press: only a pane opened
+  // before the handler's first await is asked.
+  pressing(run: () => void): void;
   // The pane id holding the keyboard, or undefined while the prompt has it.
   keyboard(): string | undefined;
   // Hands the keyboard back to the prompt, as the host does when a pane holds
@@ -146,6 +164,15 @@ function defaultEnv(platform: FakePlatform): Record<string, string> {
   return { HOME: HOME[platform] };
 }
 
+// Each element constructor returns the node it was given, so a test walks the drawn tree.
+export const drawnElements = {
+  Box: (props: Record<string, unknown> = {}) => ({ type: "Box", props }),
+  Text: (props: Record<string, unknown> = {}) => ({ type: "Text", props }),
+  Button: (props: Record<string, unknown> = {}) => ({ type: "Button", props }),
+  Input: (props: Record<string, unknown> = {}) => ({ type: "Input", props }),
+  Select: (props: Record<string, unknown> = {}) => ({ type: "Select", props }),
+};
+
 function stdoutResult(stdout: string): ProcessRunResult {
   return { exitCode: 0, stdout, stderr: "", isStdoutTruncated: false, isStderrTruncated: false };
 }
@@ -160,6 +187,8 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     storeWrites: [],
     settingsWrites: [],
     ui: [],
+    toasts: [],
+    heldToasts: [],
     panes: [],
     paneCloses: [],
     focus: [],
@@ -178,11 +207,21 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
   const env: Record<string, string | undefined> = { ...defaultEnv(options.platform), ...options.env };
   const files = new Map<string, string>(Object.entries(options.files ?? {}));
   const kv = new Map<string, unknown>();
+  // The user settings file as the host loaded it, and the writes its watcher has yet to miss.
+  const separator = options.platform === "windows" ? "\\" : "/";
+  const userSettingsPath =
+    env.CLAUDE_CONFIG_DIR !== undefined && env.CLAUDE_CONFIG_DIR !== ""
+      ? `${env.CLAUDE_CONFIG_DIR}${separator}settings.json`
+      : `${env[options.platform === "windows" ? "USERPROFILE" : "HOME"] ?? ""}${separator}.claude${separator}settings.json`;
+  let loadedUserSettings = files.get(userSettingsPath);
+  let settingsWritesToMiss = options.missedSettingsWrites ?? 0;
   const columns = options.columns ?? 200;
   let askingDepth = 0;
   const askedPanes = new Set<string>();
   let keysWith: string | undefined;
   const placedPanes = new Set<string>();
+  // Open panes whose last open asked to hold toasts.
+  const holdingPanes = new Set<string>();
 
   function uname(): ProcessRunResult {
     const name = { macos: "Darwin", linux: "Linux", windows: "Windows_NT", other: "FreeBSD" }[options.platform];
@@ -244,6 +283,14 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
         askingDepth -= 1;
       }
     },
+    pressing: (run: () => void): void => {
+      askingDepth += 1;
+      try {
+        run();
+      } finally {
+        askingDepth -= 1;
+      }
+    },
     keyboard: () => keysWith,
     dropKeys: () => {
       keysWith = undefined;
@@ -267,6 +314,10 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       },
       write: async (path: string, text: string) => {
         files.set(path, text);
+        if (path === userSettingsPath) {
+          if (settingsWritesToMiss > 0) settingsWritesToMiss -= 1;
+          else loadedUserSettings = text;
+        }
         recorded.fsWrites.push({ path, text });
         recorded.events.push(`write:${path}`);
       },
@@ -308,8 +359,10 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       },
       keys: async () => [...kv.keys()],
     },
+    // The user source answers what the host loaded, which lags a write its watcher missed.
     settings: {
-      read: async () => ({}),
+      read: async (args?: { source?: string }) =>
+        args?.source === "user" && loadedUserSettings !== undefined ? (JSON.parse(loadedUserSettings) as unknown) : {},
     },
     session: {
       id: async () => options.session?.id ?? "session-test",
@@ -327,6 +380,11 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
         recorded.coreSummaries += 1;
         return options.compact ?? { messages: [] };
       },
+      usage: async () => ({
+        startedAt: 0,
+        context: { window: options.contextWindow ?? 200_000, tokens: options.contextTokens ?? 0 },
+        rateLimits: [],
+      }),
     },
     model: {
       classify: async (text: string, labels: readonly string[]) => {
@@ -360,8 +418,11 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
         recorded.status.push(text ?? "");
       },
       toast: (text: string) => {
-        recorded.ui.push(text);
+        recorded.toasts.push(text);
+        if (holdingPanes.size > 0) recorded.heldToasts.push(text);
       },
+      // The fake's elements record their props, so a test reads the drawn tree and calls its handlers.
+      resolve: () => drawnElements,
       // The host's rule: an open answering the person is placed at any width; one
       // the plugin makes on its own waits below 144 columns, 110 once asked for.
       // Opening a pane that is already placed only retitles it.
@@ -371,6 +432,9 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
         const floor = askedPanes.has(pane.id) ? 110 : 144;
         if (askingDepth > 0 || columns >= floor || placedPanes.has(pane.id)) {
           placedPanes.add(pane.id);
+          // A shown pane holds toasts as its latest open asked: every open sets it anew.
+          if (pane.holdToasts === true) holdingPanes.add(pane.id);
+          else holdingPanes.delete(pane.id);
           // `focus` is granted here: the fake prompt is always idle and empty.
           if (pane.focus === true) keysWith = pane.id;
           return { isPlaced: true };
@@ -380,6 +444,7 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
       close: async (pane: { id: string }) => {
         recorded.paneCloses.push(pane.id);
         placedPanes.delete(pane.id);
+        holdingPanes.delete(pane.id);
         if (keysWith === pane.id) keysWith = undefined;
       },
       // As the host: only a site holding the keyboard moves its ring.
@@ -413,4 +478,77 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
 // The files a test has written, by path, for asserting what landed on disk.
 export function writtenText(engine: FakeEngine, path: string): string | undefined {
   return engine.recorded.fsWrites.filter((write) => write.path === path).at(-1)?.text;
+}
+
+type Hook = (engine: unknown, input: unknown, next: (input: unknown) => unknown) => unknown;
+type RecordedHook = { readonly event: string; readonly matcher: Readonly<Record<string, unknown>> | undefined; readonly run: Hook };
+
+// Core's own `/model <id>`, as the host checks it: a built-in alias or a Claude id is
+// taken, and any other id only while a `modelPicker.options` row in the user settings
+// the host has loaded names it. Every other event ends in `{}`.
+const BUILT_IN_MODELS = new Set(["default", "opus", "sonnet", "haiku", "fable"]);
+
+async function coreModelCommand(engine: FakeEngine, id: string): Promise<unknown> {
+  if (id === "" || BUILT_IN_MODELS.has(id) || id.includes("claude")) return {};
+  const loaded = (await engine.settings.read({ source: "user" })) as { modelPicker?: { options?: { model?: string }[] } };
+  const options = loaded.modelPicker?.options ?? [];
+  if (options.some((row) => row.model === id)) return {};
+  return { text: `Model '${id}' not found` };
+}
+
+// Records what a module registers, and dispatches events as the host chains them: a
+// hook runs when its matcher's fields equal the input's, and its `next` passes on to
+// the next matching hook. `$.command.run` on the engine dispatches `command.run` too, so
+// a hub pick's own `/model` reaches the registered hooks, and the chain ends where core would run.
+export function recordHooks(engine: FakeEngine): {
+  readonly on: unknown;
+  dispatch(event: string, input: unknown): unknown;
+} {
+  const hooks: RecordedHook[] = [];
+  const on = (event: string, matcher: unknown, hook?: unknown) => {
+    const isMatcher = typeof matcher !== "function";
+    hooks.push({
+      event,
+      matcher: isMatcher ? (matcher as Record<string, unknown>) : undefined,
+      run: (isMatcher ? hook : matcher) as Hook,
+    });
+    return { catch: () => undefined };
+  };
+  const core = (input: unknown): unknown => {
+    const run = input as { command?: string; args?: string };
+    return run.command === "model" ? coreModelCommand(engine, (run.args ?? "").trim()) : {};
+  };
+  const matches = (hook: RecordedHook, input: unknown): boolean =>
+    hook.matcher === undefined ||
+    Object.entries(hook.matcher).every(([field, value]) => (input as Record<string, unknown>)[field] === value);
+
+  function dispatch(event: string, input: unknown, terminal: (input: unknown) => unknown = core): unknown {
+    const from = (start: number) => (current: unknown): unknown => {
+      const index = hooks.findIndex((hook, at) => at >= start && hook.event === event && matches(hook, current));
+      const hook = hooks[index];
+      if (index === -1 || hook === undefined) return terminal(current);
+      return hook.run(engine, current, from(index + 1));
+    };
+    return from(0)(input);
+  }
+
+  engine.command.run = async (input: CommandRunArgs) => {
+    engine.recorded.commands.push(input);
+    const run = {
+      command: input.command,
+      args: input.args ?? "",
+      origin: { kind: "plugin", name: "nmg-router" },
+      presentation: { isFullscreen: false, columns: 200 },
+    };
+    return (await dispatch("command.run", run)) as Awaited<ReturnType<typeof engine.command.run>>;
+  };
+
+  // A person's close is their Escape, which hands the keyboard back to the prompt
+  // before the hooks hear it, so a pane that refuses the close no longer holds it.
+  const dispatchEvent = (event: string, input: unknown): unknown => {
+    if (event === "ui.close" && (input as { origin?: { kind?: string } }).origin?.kind === "person") engine.dropKeys();
+    return dispatch(event, input);
+  };
+
+  return { on, dispatch: dispatchEvent };
 }

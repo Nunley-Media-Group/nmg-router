@@ -39,6 +39,8 @@ export type Catalog = {
   activeAccount(providerId: string): Promise<string | undefined>;
   // Drops a provider's cached models and status, once it has no account left.
   forget(providerId: string): Promise<void>;
+  // Calls `listener` after each refresh and logout. Returns the way to stop listening.
+  onChange(listener: () => void): () => void;
 };
 
 export function createCatalog(deps: CatalogDeps, builtins: readonly ProviderPlugin[] = BUILTIN_PROVIDERS): Catalog {
@@ -48,6 +50,17 @@ export function createCatalog(deps: CatalogDeps, builtins: readonly ProviderPlug
   let loaded: Promise<void> | undefined;
   let hostPlatform: Promise<string> | undefined;
   const reservedIds = builtins.map((plugin) => plugin.identity.id);
+  const listeners = new Set<() => void>();
+
+  function changed(): void {
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch {
+        // A listener's failure is its own; the catalog's change stands.
+      }
+    }
+  }
 
   const platform = (): Promise<string> => (hostPlatform ??= detectPlatform(deps));
   const isEnabled = (providerId: string): boolean => !config.disabledProviders.includes(providerId);
@@ -174,6 +187,7 @@ export function createCatalog(deps: CatalogDeps, builtins: readonly ProviderPlug
         await refreshOne(plugin, now);
       }
       await writeCache(deps, cache);
+      changed();
     },
     models() {
       return enabledProviders().flatMap((plugin) => {
@@ -197,6 +211,13 @@ export function createCatalog(deps: CatalogDeps, builtins: readonly ProviderPlug
       const { [providerId]: _dropped, ...kept } = cache.providers;
       cache = { version: 1, providers: kept };
       await writeCache(deps, cache);
+      changed();
+    },
+    onChange(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
   };
 }

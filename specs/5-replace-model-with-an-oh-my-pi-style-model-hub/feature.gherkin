@@ -1,5 +1,5 @@
 **Issue**: #5
-**Date**: 2026-10-25
+**Date**: 2026-10-26
 **Status**: Approved
 **Author**: Rich Nunley
 **Related Spec**: specs/2-add-the-provider-catalog-with-provider-aware-login-and-logout/
@@ -45,10 +45,10 @@ Feature: oh-my-pi-style model hub for /model
     Then the switch runs without the hub, the provider refreshes once, the first Esc clears the search and the second closes the hub
 
   @SCN007
-  Scenario: A smaller context window compacts before switching
+  Scenario: A smaller context window refuses the pick
     Given a transcript larger than a routed model's context window
     When the user selects that model
-    Then its row showed a context-too-large mark, the session compacts, and then the model switches
+    Then its row showed a context-too-large mark, the pick is refused with a notice, the current model stays and the pane stays open
 
   @SCN008
   Scenario: Settings rows follow the catalog

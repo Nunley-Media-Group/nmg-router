@@ -1,7 +1,7 @@
 # Design: Replace /model with an oh-my-pi-style model hub
 
 **Issue**: #5
-**Date**: 2026-10-25
+**Date**: 2026-10-26
 **Status**: Approved
 **Author**: Rich Nunley
 **Related Spec**: specs/2-add-the-provider-catalog-with-provider-aware-login-and-logout/
@@ -14,7 +14,7 @@ A `command.run` hook on `model` handles the command:
 
 From then on the hub lives in pane closures:
 - `onPress`, `onInput` and the `ui.focus` and `ui.close` hooks update a pure `HubState`, and the pane is redrawn from it.
-- A model pick closes the pane, compacts first when the transcript exceeds the model's window, and runs `$.command.run({ command: "model", args: id })`. The same hook then passes that run to Claude Code's own `/model`.
+- A model pick whose transcript exceeds the model's window is refused: the pane stays open with a notice. Any other pick closes the pane and runs `$.command.run({ command: "model", args: id })`. The same hook then passes that run to Claude Code's own `/model`.
 
 SOLID parts:
 - **Entry sources (`HubSource`):** the Claude lineup source and the catalog source give the hub its sidebar entries and rows. A new kind of entry is a new source.
@@ -54,7 +54,7 @@ src/login/fuzzy.ts              (reuse) fuzzyFilter
 | Default order and versions | `pi-coding-agent/src/modes/components/model-browser.ts` (`sortModelItems`, `extractVersionNumber`) |
 | Esc, focus, auto-refresh once per process | `pi-coding-agent/src/modes/components/model-hub.ts` (key handling, `autoRefreshedProviders`) |
 | Locked provider view and login hand-off | `pi-coding-agent/src/modes/components/model-hub.ts` (no-credentials view), `pi-coding-agent/src/modes/controllers/selector-controller.ts` (reopen on the provider) |
-| Context too large | `pi-coding-agent/src/modes/components/model-picker.ts`, `model-browser.ts` (`isOverContext`), `selector-controller.ts` (compact, then switch) |
+| Context too large | `pi-coding-agent/src/modes/components/model-picker.ts`, `model-browser.ts` (`isOverContext`), `selector-controller.ts` (compact, then switch; this hub refuses instead, see Hub Layout) |
 | Recent use | `pi-coding-agent/src/session/agent-storage.ts` (`model_usage`) |
 | Number format | `pi-utils/src/format.ts` (`formatNumber`) |
 
@@ -66,7 +66,7 @@ src/login/fuzzy.ts              (reuse) fuzzyFilter
 | `HubSource` | — | `{ id, label, isLocked(), rows(): HubRow[], refresh?() }` | `claudeSource` is never locked and has no refresh; `catalogSource(provider)` is locked when the provider has no indexed credential |
 | `HubRow` | — | `{ id, switchArg, provider, name, contextWindow?, maxOutput?, price?, reasoning?, vision?, speed? }` | `switchArg` is the alias for Claude rows and `provider/model` for routed rows |
 | `HubState` | — | `{ scope: "all" \| sourceId, query, highlighted?, refreshing: Set<sourceId>, refreshed: Set<sourceId>, view: "list" \| "locked", currentModel, contextTokens }` | Kept by the controller; every change redraws |
-| `hub.pick($, row)` | highlighted row | — | Closes the pane; if `row.contextWindow` is below `contextTokens`, `await $.session.compact()` first, and on `{ skip }` or a rejection shows `$.ui.toast("Kept <current>: compaction did not finish.")` and stops; then `$.command.run({ command: "model", args: row.switchArg })` |
+| `hub.pick($, row)` | highlighted row | — | If `row.contextWindow` is below `contextTokens`, shows `$.ui.toast("Kept <current>: this conversation is larger than <switchArg>'s window.")` and stops: the pane stays open and nothing is switched or compacted. Otherwise closes the pane, then `$.command.run({ command: "model", args: row.switchArg })` |
 | `syncModelPickerRows($, models)` | enabled routed `CatalogModel[]` | — | See Data / Storage |
 | `loginToProvider($, providerId)` | provider id | `{ ok: boolean, text }` | #2's API-key or OAuth flow for one provider, as `/login` runs it after a pick |
 
@@ -90,7 +90,7 @@ src/login/fuzzy.ts              (reuse) fuzzyFilter
 
 **Row label** (`Text tabular`):
 - The left part is `<provider>/<id>` in the `all` scope and `<id>` in a provider scope, followed by ` ✓` on the current model.
-- When `contextTokens > contextWindow`, ` ⊘ context>128k` is added (formatted window), and the row is dimmed.
+- When `contextTokens > contextWindow`, ` ⊘ context>128k` is added (formatted window), and the row is dimmed. Picking such a row is refused; see `hub.pick`.
 - The right-aligned columns are context (`128k`), price (`$0.6/2.4` or `free`) and speed (`118t/s` from #3's `metrics.speed`, when present).
 - Claude rows show their label and no price or context.
 
@@ -152,6 +152,7 @@ The rows hold ids, names and numbers only, never a credential.
 |--------|----------|--------|
 | Return from the hook at once; picks in pane closures | Selected | A hook awaiting a pane pick overruns its 10 s budget |
 | Switch via `$.command.run({ command: "model", args })` | Selected | No mod API sets the model; the built-in switch keeps the conversation |
+| Compact first with `$.session.compact()` | Rejected | #4 forbids the mod calling it: a core compaction skips the mod's hook and sends the routed transcript to Anthropic |
 | Write `~/.claude/settings.json` | Selected | User choice; persistent rows honored as user settings |
 | `settings.read` overlay | Rejected | User preferred persistent rows |
 | F5 or a hotkey button for refresh | Rejected | No raw keys reach panes; the user chose first-open auto-refresh |
@@ -162,3 +163,4 @@ The rows hold ids, names and numbers only, never a credential.
 | Issue | Date | Summary |
 |-------|------|---------|
 | #5 | 2026-10-25 | Initial feature design |
+| #5 | 2026-10-26 | Amended: an over-window pick is refused, not compacted, per #4 |

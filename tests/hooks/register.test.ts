@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { register } from "../../hooks/register.ts";
+import { HUB_PANE_ID } from "../../src/hub/hub-controller.ts";
 import { PANE_ID } from "../../src/login/pane.ts";
 
 // Records every registration the module makes, so the wiring is checked without a host.
@@ -19,7 +20,7 @@ describe("hooks wiring", () => {
   // turns add the compose capture and the turn.step hook, which answers routed models.
   // Routed compaction, the main-loop trigger, routed permissions and the permission
   // mode observers are the rest.
-  it("registers the command hook, the compose capture, the turn step, the compaction and permission hooks, the pane render and the pane close, and nothing else", () => {
+  it("registers the command hooks, the compose capture, the turn step, the compaction and permission hooks, the login and model hub panes, and nothing else", () => {
     const { on, calls } = recorder();
     register(on, {} as never);
     expect(calls).toEqual([
@@ -34,6 +35,11 @@ describe("hooks wiring", () => {
       { event: "classic.PostToolUse", matcher: undefined },
       { event: "ui.render", matcher: { component: "Pane", requestId: PANE_ID } },
       { event: "ui.close", matcher: { id: PANE_ID } },
+      { event: "session.start", matcher: undefined },
+      { event: "command.run", matcher: { command: "model" } },
+      { event: "ui.render", matcher: { component: "Pane", requestId: HUB_PANE_ID } },
+      { event: "ui.focus", matcher: { requestId: HUB_PANE_ID } },
+      { event: "ui.close", matcher: { id: HUB_PANE_ID } },
     ]);
   });
 });

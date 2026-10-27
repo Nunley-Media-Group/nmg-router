@@ -1,7 +1,7 @@
 # Tasks: Replace /model with an oh-my-pi-style model hub
 
 **Issue**: #5
-**Date**: 2026-10-25
+**Date**: 2026-10-26
 **Status**: Approved
 **Author**: Rich Nunley
 **Related Spec**: specs/2-add-the-provider-catalog-with-provider-aware-login-and-logout/
@@ -42,7 +42,7 @@
 **Depends**: T003
 **Acceptance**:
 - `/model` with arguments records recent use and returns `next(e)`; bare `/model` opens the hub and returns `{}` (AC6, FR1)
-- A pick closes the pane and runs `$.command.run({ command: "model", args })`; an over-context pick compacts first and keeps the model with a toast when compaction is skipped or rejected (AC4, AC7, FR3)
+- A pick closes the pane and runs `$.command.run({ command: "model", args })`; an over-context pick is refused: the pane stays open, nothing is switched or compacted, and a toast names the current model (AC4, AC7, FR3)
 - The first time each provider is opened in a session, it is refreshed; Esc refuses the close and clears a non-empty query, and closes otherwise (AC6, FR2)
 - The locked view's login button runs `loginToProvider` (exported from `src/login/login-command.ts`) and reopens the hub on that provider after success (AC5, FR4)
 
@@ -68,7 +68,7 @@
 **Type**: Modify
 **Depends**: none
 **Acceptance**:
-- Fakes record `$.command.run`, `$.ui.open`/`close`/`toast`, `$.session.model`, `$.session.usage`, `$.session.compact` (result, skip or rejection) and `$.fs.write` to the settings path, and can dispatch `ui.focus`, `ui.close` and button presses to the hub
+- Fakes record `$.command.run`, `$.ui.open`/`close`/`toast`, `$.session.model`, `$.session.usage`, `$.session.compact` calls (recorded, so a test shows the hub makes none) and `$.fs.write` to the settings path, and can dispatch `ui.focus`, `ui.close` and button presses to the hub
 
 ### T008: Hub tests
 
@@ -82,7 +82,7 @@
 - AC4: picking `opencode-go/kimi-k3.1-pro` and then `opus` runs `$.command.run({ command: "model", args })` with each id, and the hook passes each run to `next(e)`
 - AC5: pressing dimmed xAI shows the no-credentials text, the bundled xAI model ids and the login button; a successful faked login reopens the hub scoped to xAI
 - AC6: `/model opus` returns the `next(e)` result without `ui.open`; the first open of a provider calls `catalog.refresh` once per session; Esc with a query clears it and keeps the pane, and Esc with no query closes it
-- AC7: with `contextTokens` above a row's window the row carries the mark; picking it calls `$.session.compact()` before `$.command.run`; a `{ skip }` result leaves the model and shows the toast
+- AC7: with `contextTokens` above a row's window the row carries the mark; picking it runs no `$.session.compact()` and no `$.command.run`, keeps the pane open and shows the `Kept <current>: ...` toast
 
 ### T009: Settings-row tests
 
@@ -97,3 +97,4 @@
 | Issue | Date | Summary |
 |-------|------|---------|
 | #5 | 2026-10-25 | Initial feature tasks |
+| #5 | 2026-10-26 | Amended AC7 (T004, T007, T008): an over-window pick is refused, not compacted, per #4 |
