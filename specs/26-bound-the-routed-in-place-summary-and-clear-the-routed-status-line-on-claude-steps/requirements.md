@@ -14,6 +14,8 @@ In-place summary:
 2. Run turns until the routed context reaches the mod's auto-compaction threshold and the in-place summary starts.
 3. Send another prompt. The routed step never starts.
 
+A routed step sent while any in-place summary is still running waits for it. Claude Code gives a `turn.step` hook 10 seconds of its own time, and only `$` calls do not count against it. So a summary that runs longer than about 10 seconds makes the waiting step fail with `nmg-router failed to answer with <provider>.` and the status `<provider> error: internal`, even with a 120-second deadline on the summary.
+
 Status line:
 
 1. Run a turn on a routed model. The routed status line appears, for example `fakelocal/fake-small · thinking unsupported`.
@@ -24,8 +26,8 @@ Status line:
 
 | | Description |
 |---|-------------|
-| **Expected** | The in-place summary gives up 120 seconds after its request is sent. It leaves the conversation as it was, logs one transcript line naming the provider and saying the summary timed out, and retries at the next turn end. The waiting routed step then goes ahead. A main-loop step on a Claude model clears nmg-router's status line. |
-| **Actual** | A stalled provider holds the next routed step until the person interrupts it. The routed status line stays visible on Claude turns. |
+| **Expected** | The in-place summary gives up 120 seconds after its request is sent. It leaves the conversation as it was, logs one transcript line naming the provider and saying the summary timed out, and retries at the next turn end. A routed step never waits for a running summary: it answers at once with the routed view as it is, and a summary that finishes later applies from the next routed step. A main-loop step on a Claude model clears nmg-router's status line. |
+| **Actual** | A stalled provider holds the next routed step until the person interrupts it. A summary that runs longer than about 10 seconds makes the waiting routed step fail with an `internal` error. The routed status line stays visible on Claude turns. |
 
 ## Acceptance Criteria
 
@@ -34,6 +36,12 @@ Status line:
 **Given** a routed model over the auto-compaction threshold whose provider accepts the summary request and then sends nothing
 **When** 120 seconds pass after the summary request is sent
 **Then** the request is aborted, the routed view and conversation are unchanged, one transcript line names the provider and says the summary timed out, and the next routed main-loop step runs without waiting further
+
+### AC6: A routed step does not wait for a running summary
+
+**Given** an in-place summary that is still running, whether or not its provider will ever answer
+**When** a routed main-loop step starts
+**Then** the step answers with the routed view as it is when the step starts, without waiting for the summary, and does not fail because of it. When the summary later finishes, the next routed main-loop step sends it
 
 ### AC2: A timed-out summary retries
 
@@ -66,6 +74,7 @@ Status line:
 | FR1 | The in-place summary's provider call is aborted 120 seconds after it is sent, and the summary stops waiting on it then, whichever transport is in use | Must |
 | FR2 | A timed-out summary goes through the existing summary-failure path: the view is unchanged, one line names the provider and the timeout (`<provider> could not summarize this conversation (timed_out); it will be retried at the next turn end.`), and the summary is retried at the next turn end. Text received before the deadline is discarded | Must |
 | FR3 | A main-loop step on a Claude model clears nmg-router's status line if a routed step set it. Subagent steps never change the status line | Must |
+| FR4 | A routed main-loop step never waits for a running in-place summary. It reads the routed view as it is when the step starts. A summary that finishes later is kept and applies from the next routed main-loop step. This replaces the rule in spec #4 that a routed main-loop step first awaits a pending summary | Must |
 
 ## Out of Scope
 
@@ -78,3 +87,4 @@ Status line:
 | Issue | Date | Summary |
 |-------|------|---------|
 | #26 | 2026-10-27 | Initial defect report |
+| #26 | 2026-10-27 | Add AC6 and FR4: a routed step no longer waits for a running summary, because the wait counts against the 10-second `turn.step` hook budget |

@@ -36,12 +36,22 @@ function kindOf(error: unknown): string {
   return error instanceof RoutedError ? error.kind : "internal";
 }
 
+// The longest an in-place summary waits for its provider. At the deadline the request
+// is aborted and the summary dropped, so a stalled provider cannot hold the next routed step.
+export const SUMMARY_TIMEOUT_MS = 120_000;
+
 // Summarizes the main loop's messages after the current cut, with the current
-// summary carried in, and keeps the result as the new view. A failure leaves the
-// view as it was; the next turn end, still over the threshold, retries.
+// summary carried in, and keeps the result as the new view. A failure, or a summary
+// still running at the deadline, leaves the view as it was; the next turn end, still
+// over the threshold, retries.
 export async function summarizeInPlace(deps: TriggerDeps, model: string, info: RoutedModelInfo): Promise<void> {
   const notSummarized = (kind: string): void =>
     deps.log(`${info.provider} could not summarize this conversation (${kind}); it will be retried at the next turn end.`);
+  const controller = new AbortController();
+  // Settles when the deadline aborts the request, even on a transport that cannot abort it.
+  const expired = new Promise<undefined>((resolve) => {
+    controller.signal.addEventListener("abort", () => resolve(undefined), { once: true });
+  });
   try {
     const messages = await deps.messages();
     if (!Array.isArray(messages)) return notSummarized("unreadable_context");
@@ -50,11 +60,17 @@ export async function summarizeInPlace(deps: TriggerDeps, model: string, info: R
     const cut = messages.length;
     const from = current !== undefined && current.cut <= cut ? current : undefined;
     const request = buildSummaryRequest(messages.slice(from?.cut ?? 0), undefined, { id: model, maxOutput: info.maxOutput }, from?.summary);
-    const summary = (await deps.complete(model, request, new AbortController().signal)).trim();
+    deps.after(SUMMARY_TIMEOUT_MS, () => controller.abort());
+    // A reply after the deadline loses the race, and its late rejection is handled by the race too.
+    const reply = await Promise.race([deps.complete(model, request, controller.signal), expired]);
+    // Text received before the deadline is discarded.
+    if (controller.signal.aborted || reply === undefined) return notSummarized("timed_out");
+    const summary = reply.trim();
     if (summary === "") return notSummarized("malformed");
     deps.view.set(MAIN_LOOP, { summary, model, cut });
     deps.tracker.resetContext(MAIN_LOOP);
   } catch (error) {
+    if (controller.signal.aborted) return notSummarized("timed_out");
     notSummarized(kindOf(error));
   }
 }
@@ -68,7 +84,7 @@ export function createAutoTrigger(deps: TriggerDeps): AutoTrigger {
         const info = await deps.describe(model);
         if (info.contextWindow === undefined || !shouldCompact(deps.tracker.contextTokens(MAIN_LOOP), info.contextWindow)) return;
         // The turn is still ending here, so the summary waits for the clock. It is
-        // pending from now, so a step that starts first waits for it.
+        // pending from now, so no second summary starts while it runs.
         deps.view.hold(
           MAIN_LOOP,
           new Promise<void>((resolve) => {

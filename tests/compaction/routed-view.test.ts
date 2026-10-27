@@ -3,7 +3,7 @@ import { createRoutedView } from "../../src/compaction/routed-view.ts";
 import { MAIN_LOOP } from "../../src/routing/session-tracker.ts";
 import { routeStep } from "../../src/routing/turn-step.ts";
 import type { ApiMessageInput } from "../../src/translate/messages.ts";
-import { CHAT_URL, MODEL, SESSION, chatTurn, collect, harness, postsTo, remember, replies, signIn, spyNext, step, userText } from "../support/routing.ts";
+import { CHAT_URL, MODEL, SESSION, chatTurn, collect, harness, postsTo, remember, replies, signIn, spyNext, step, textOf, userText } from "../support/routing.ts";
 
 const CLAUDE = "claude-sonnet-5-5";
 
@@ -65,9 +65,27 @@ describe("routed steps with a view", () => {
     expect(sent).not.toContain("Old question");
   });
 
-  it("waits for a pending summary before it reads the transcript", async () => {
+  // AC6, FR4: a routed main-loop step never waits for a running summary, which counts against the hook budget.
+  it("answers at once while a summary is still running, with the view as it is", async () => {
     const transcript = [userText("Old question"), assistantText("Old answer.")];
     const h = harness({ http: replies(chatTurn({ text: "ok" })) }, transcript);
+    await signIn(h.engine);
+    remember(h.capture);
+    h.view.hold(MAIN_LOOP, new Promise<void>(() => undefined));
+    transcript.push(userText("New question"));
+
+    const answered = await collect(routeStep(h.router, step(0), spyNext()));
+
+    expect(textOf(answered.chunks)).toBe("ok");
+    const sent = JSON.stringify(bodyOf(h).messages);
+    expect(sent).toContain("New question");
+    expect(sent).not.toContain("<summary>");
+    expect(h.view.get(MAIN_LOOP)).toBeUndefined();
+  });
+
+  it("sends a summary that finishes during a step from the next routed main-loop step", async () => {
+    const transcript = [userText("Old question"), assistantText("Old answer.")];
+    const h = harness({ http: replies(chatTurn({ text: "First." }), chatTurn({ text: "Second." })) }, transcript);
     await signIn(h.engine);
     remember(h.capture);
     let finish: () => void = () => undefined;
@@ -82,13 +100,12 @@ describe("routed steps with a view", () => {
     );
     transcript.push(userText("New question"));
 
-    const running = collect(routeStep(h.router, step(0), spyNext()));
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(postsTo(h.engine, CHAT_URL)).toHaveLength(0);
+    await collect(routeStep(h.router, step(0), spyNext()));
+    expect(JSON.stringify(bodyOf(h, 0).messages)).not.toContain("Fresh summary.");
     finish();
-    await running;
+    await collect(routeStep(h.router, step(1), spyNext()));
 
-    expect(JSON.stringify(bodyOf(h).messages)).toContain("Fresh summary.");
+    expect(JSON.stringify(bodyOf(h, 1).messages)).toContain("Fresh summary.");
   });
 
   it("never shows the view to a Claude step or a subagent step", async () => {

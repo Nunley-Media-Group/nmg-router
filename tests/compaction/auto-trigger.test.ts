@@ -1,11 +1,12 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createAutoTrigger, type TriggerDeps } from "../../src/compaction/auto-trigger.ts";
+import { SUMMARY_TIMEOUT_MS, createAutoTrigger, type TriggerDeps } from "../../src/compaction/auto-trigger.ts";
 import { shouldCompact, thresholdTokens } from "../../src/compaction/threshold.ts";
 import { MAIN_LOOP } from "../../src/routing/session-tracker.ts";
+import { routeStep } from "../../src/routing/turn-step.ts";
 import type { ApiMessageInput } from "../../src/translate/messages.ts";
-import { CHAT_URL, MODEL, chatTurn, harness, postsTo, signIn, userText, type Harness } from "../support/routing.ts";
+import { CHAT_URL, HEAD, MODEL, chatTurn, collect, harness, postsTo, signIn, spyNext, step, textOf, userText, type Harness } from "../support/routing.ts";
 import type { FakeHttpResponder } from "../support/fake-engine.ts";
 import { usageOf } from "../support/fake-turn.ts";
 
@@ -14,25 +15,37 @@ const WINDOW = 128000;
 // Waits for the callbacks the fake clock scheduled and the summary they start.
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
+// A timer other than a 0-ms one, which the test fires itself.
+type Timer = { readonly ms: number; readonly fn: () => void };
+
 function assistantText(text: string): ApiMessageInput {
   return { role: "assistant", content: [{ type: "text", text }] };
 }
 
 // Trigger deps over a harness, as hooks/register.ts builds them, with a 128000-token window.
-function triggerDeps(h: Harness, overrides: Partial<TriggerDeps> = {}): TriggerDeps & { readonly logs: string[]; readonly debugLogs: string[] } {
+// A 0-ms timer runs on the next macrotask; any other waits in `timers` for the test to fire it.
+function triggerDeps(
+  h: Harness,
+  overrides: Partial<TriggerDeps> = {},
+): TriggerDeps & { readonly logs: string[]; readonly debugLogs: string[]; readonly timers: Timer[] } {
   const logs: string[] = [];
   const debugLogs: string[] = [];
+  const timers: Timer[] = [];
   return {
     tracker: h.tracker,
     view: h.view,
     describe: async (model) => ({ ...(await h.router.describe(model)), contextWindow: WINDOW }),
     complete: (model, request, signal) => h.router.complete(model, request, signal),
     messages: () => h.engine.session.messages({ as: "api" }),
-    after: (ms, fn) => h.engine.clock.after(ms, fn),
+    after: (ms, fn) => {
+      if (ms === 0) h.engine.clock.after(ms, fn);
+      else timers.push({ ms, fn });
+    },
     log: (text) => logs.push(text),
     debug: (text) => debugLogs.push(text),
     logs,
     debugLogs,
+    timers,
     ...overrides,
   };
 }
@@ -218,6 +231,142 @@ describe("a failed in-place summary", () => {
     await tick();
     expect(h.view.get(MAIN_LOOP)?.summary).toBe("Second try.");
     expect(deps.logs).toHaveLength(1);
+  });
+});
+
+// The one line a summary that misses its deadline logs.
+const TIMED_OUT = "OpenCode Go could not summarize this conversation (timed_out); it will be retried at the next turn end.";
+
+// The curl probe succeeds, so a routed request goes through a child the script describes.
+function curlProbe(argv: readonly string[]) {
+  return argv[0] === "curl" ? { exitCode: 0, stdout: "curl 8", stderr: "", isStdoutTruncated: false, isStderrTruncated: false } : undefined;
+}
+
+// FR1, FR2, AC1-AC3: an in-place summary is aborted at 120 seconds, dropped and retried at the next turn end.
+describe("the summary deadline", () => {
+  it("is 120 seconds", () => {
+    expect(SUMMARY_TIMEOUT_MS).toBe(120000);
+  });
+
+  it("aborts a summary that the curl child never finishes, and routed steps answer before and after the deadline", async () => {
+    let children = 0;
+    const h = harness(
+      {
+        run: curlProbe,
+        spawn: () => {
+          children += 1;
+          return children === 1 ? { pieces: [HEAD], hang: true } : { pieces: [HEAD, chatTurn({ text: "Answer." })] };
+        },
+      },
+      [userText("Hi")],
+    );
+    await signIn(h.engine);
+    h.tracker.recordStep(MAIN_LOOP, MODEL);
+    h.tracker.recordUsage(MAIN_LOOP, usageOf(120000));
+    h.view.set(MAIN_LOOP, { summary: "Kept.", model: MODEL, cut: 0 });
+    const deps = triggerDeps(h);
+
+    await createAutoTrigger(deps).onTurnComplete();
+    await tick();
+    expect(deps.timers.map((timer) => timer.ms)).toEqual([SUMMARY_TIMEOUT_MS]);
+    expect(h.view.pending(MAIN_LOOP)).toBeDefined();
+
+    // AC6: a routed main-loop step answers while the stalled summary is still pending, before the deadline.
+    const early = await collect(routeStep(h.router, step(0), spyNext()));
+    expect(textOf(early.chunks)).toBe("Answer.");
+    expect(h.view.pending(MAIN_LOOP)).toBeDefined();
+    // The early step's own usage is the context from here, and the timeout must leave it as it is.
+    const context = h.tracker.contextTokens(MAIN_LOOP);
+
+    deps.timers[0]?.fn();
+    await tick();
+
+    expect(h.engine.recorded.events).toContain("child:killed");
+    expect(deps.logs).toEqual([TIMED_OUT]);
+    expect(h.view.get(MAIN_LOOP)).toEqual({ summary: "Kept.", model: MODEL, cut: 0 });
+    expect(h.tracker.contextTokens(MAIN_LOOP)).toBe(context);
+    expect(h.view.pending(MAIN_LOOP)).toBeUndefined();
+
+    const routed = await collect(routeStep(h.router, step(1), spyNext()));
+    expect(textOf(routed.chunks)).toBe("Answer.");
+  });
+
+  // Whatever complete does at the deadline, the summary settles, logs once and keeps the view.
+  it.each<[string, TriggerDeps["complete"]]>([
+    [
+      "answers partial text",
+      (_model, _request, signal) => new Promise<string>((resolve) => signal.addEventListener("abort", () => resolve("Partial."), { once: true })),
+    ],
+    [
+      "rejects",
+      (_model, _request, signal) =>
+        new Promise<string>((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true })),
+    ],
+    ["never settles", () => new Promise<string>(() => undefined)],
+  ])("logs one timed_out line and keeps the view when complete %s at the deadline", async (_label, complete) => {
+    const h = await routedAt(120000, [userText("Hi")], queue());
+    h.view.set(MAIN_LOOP, { summary: "Kept.", model: MODEL, cut: 0 });
+    const deps = triggerDeps(h, { complete });
+
+    await createAutoTrigger(deps).onTurnComplete();
+    await tick();
+    deps.timers[0]?.fn();
+    await tick();
+
+    expect(deps.logs).toEqual([TIMED_OUT]);
+    expect(h.view.get(MAIN_LOOP)).toEqual({ summary: "Kept.", model: MODEL, cut: 0 });
+    expect(h.tracker.contextTokens(MAIN_LOOP)).toBe(120000);
+    expect(h.view.pending(MAIN_LOOP)).toBeUndefined();
+  });
+
+  it("sends a second summary at the next turn end after a timed-out one, and keeps its reply", async () => {
+    let children = 0;
+    const h = harness(
+      {
+        run: curlProbe,
+        spawn: () => {
+          children += 1;
+          return children === 1 ? { pieces: [HEAD], hang: true } : { pieces: [HEAD, chatTurn({ text: "Second try." })] };
+        },
+      },
+      [userText("Hi")],
+    );
+    await signIn(h.engine);
+    h.tracker.recordStep(MAIN_LOOP, MODEL);
+    h.tracker.recordUsage(MAIN_LOOP, usageOf(120000));
+    const deps = triggerDeps(h);
+    const trigger = createAutoTrigger(deps);
+
+    await trigger.onTurnComplete();
+    await tick();
+    deps.timers[0]?.fn();
+    await tick();
+    expect(h.view.get(MAIN_LOOP)).toBeUndefined();
+
+    await trigger.onTurnComplete();
+    await tick();
+
+    expect(h.view.get(MAIN_LOOP)).toEqual({ summary: "Second try.", model: MODEL, cut: 1 });
+    expect(deps.logs).toEqual([TIMED_OUT]);
+    expect(h.engine.recorded.processes.filter((process) => process.stdin?.includes("<conversation>"))).toHaveLength(2);
+  });
+
+  it("keeps a summary that returns before the deadline, and logs no timeout line", async () => {
+    const h = await routedAt(120000, [userText("Hi")], queue(chatTurn({ text: "Quick." })));
+    const deps = triggerDeps(h);
+
+    await createAutoTrigger(deps).onTurnComplete();
+    await tick();
+    expect(h.view.get(MAIN_LOOP)).toEqual({ summary: "Quick.", model: MODEL, cut: 1 });
+
+    // The deadline fires after the summary has settled, and changes nothing.
+    deps.timers[0]?.fn();
+    await tick();
+
+    expect(deps.timers.map((timer) => timer.ms)).toEqual([SUMMARY_TIMEOUT_MS]);
+    expect(h.view.get(MAIN_LOOP)).toEqual({ summary: "Quick.", model: MODEL, cut: 1 });
+    expect(h.tracker.contextTokens(MAIN_LOOP)).toBe(0);
+    expect(deps.logs).toEqual([]);
   });
 });
 

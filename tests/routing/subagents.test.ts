@@ -59,6 +59,23 @@ describe("subagent steps by their own model", () => {
 
     expect(h.engine.recorded.status).toHaveLength(afterMain);
   });
+
+  // AC5: a Claude subagent step never touches the status line a routed main loop set.
+  it("leaves the routed status line as it is for a Claude subagent step after a routed main-loop step", async () => {
+    const h = harness({ http: replies(chatTurn({ text: "Main." })) });
+    await signIn(h.engine);
+    remember(h.capture);
+    await collect(routeStep(h.router, step(0), spyNext()));
+    const shown = h.engine.recorded.status.at(-1);
+    expect(shown).not.toBe("");
+    const next = spyNext();
+
+    await collect(routeStep(h.router, step(0, CLAUDE, { agentId: "agent-2" }), next));
+
+    expect(next.calls).toEqual([expect.objectContaining({ agentId: "agent-2", model: CLAUDE })]);
+    expect(h.engine.recorded.status).toHaveLength(1);
+    expect(h.engine.recorded.status.at(-1)).toBe(shown);
+  });
 });
 
 // The session's tool listing as 2.1.311 answers `$.tool.list()` during a subagent step: the main loop's

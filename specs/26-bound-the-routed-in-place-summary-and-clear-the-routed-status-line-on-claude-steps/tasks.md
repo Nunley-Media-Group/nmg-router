@@ -54,8 +54,30 @@
 - AC5: a Claude step with no routed status before it records no status call. A Claude subagent step (`agentId` set) after a routed main-loop step leaves the routed status unchanged. The existing thinking-status, error-status and subagent status tests still pass.
 - The AC4 tests fail on the code before T002.
 
+### T005: Stop waiting for a running summary
+
+**File(s)**: `src/routing/router.ts`, `src/compaction/auto-trigger.ts`
+**Type**: Modify
+**Depends**: T001
+**Acceptance**:
+- `settled()` and the `await settled(view.pending(MAIN_LOOP), signal)` call are removed. A routed main-loop step never awaits `view.pending(MAIN_LOOP)`.
+- `createAutoTrigger` still uses `view.pending(MAIN_LOOP)` to avoid starting a second summary. Its comment no longer says a step waits for the summary.
+- `tsc` and the full suite pass.
+
+### T006: Regression tests for steps during a running summary
+
+**File(s)**: `tests/compaction/routed-view.test.ts`, `tests/compaction/auto-trigger.test.ts`
+**Type**: Modify
+**Depends**: T005
+**Acceptance**:
+- AC6: the test "waits for a pending summary before it reads the transcript" is replaced. With `h.view.hold(MAIN_LOOP, <promise that never settles>)`, a routed main-loop step through `routeStep` answers and sends the transcript under the current view, with no summary added.
+- AC6: when the held summary then calls `view.set` and settles, the next routed main-loop step's request contains the new summary.
+- AC1: the auto-trigger deadline test also sends a routed main-loop step while the stalled summary is still pending, before the deadline timer fires, and that step answers.
+- Each new AC6 test fails on the code before T005.
+
 ## Change History
 
 | Issue | Date | Summary |
 |-------|------|---------|
 | #26 | 2026-10-27 | Initial defect tasks |
+| #26 | 2026-10-27 | Add T005 and T006: routed steps no longer wait for a running summary |
