@@ -157,8 +157,23 @@ export function nodesOf(tree: unknown, type: string): Node[] {
 // The node keyed `key` in the drawn tree, or undefined.
 export function keyed(tree: unknown, key: string): Node | undefined {
   return nodesOf(tree, "Button")
-    .concat(nodesOf(tree, "Input"))
+    .concat(nodesOf(tree, "Input"), nodesOf(tree, "Select"))
     .find((node) => node.props.key === key);
+}
+
+// The values of a Select's options, in the order drawn.
+export function optionValues(tree: unknown, key: string): string[] {
+  return (keyed(tree, key)?.props.options ?? []).map((option: { value: string }) => option.value);
+}
+
+// The person's pick in the providers Select.
+export function chooseScope(tree: unknown, id: string): void {
+  keyed(tree, "scopes")?.props.onSelect?.(id);
+}
+
+// The person's pick in the models Select, by the row's `/model` argument.
+export function chooseModel(tree: unknown, switchArg: string): void {
+  keyed(tree, "models")?.props.onSelect?.(`row:${switchArg}`);
 }
 
 // The text a subtree draws: its string children, and its Text nodes', joined in order.
@@ -168,7 +183,12 @@ export function textOf(tree: unknown): string {
   if (typeof tree !== "object" || tree === null) return "";
   const node = tree as Node;
   const children = node.props?.children;
-  const own = node.props?.label !== undefined ? String(node.props.label) : "";
+  const own =
+    node.type === "Select"
+      ? node.props.options.map((option: { label: string }) => option.label).join("\n")
+      : node.props?.label !== undefined
+        ? String(node.props.label)
+        : "";
   return own + textOf(children);
 }
 

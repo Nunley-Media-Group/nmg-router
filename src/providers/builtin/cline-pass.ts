@@ -6,6 +6,11 @@ import type { DiscoveryOutcome, HttpDeps, ModelSource, ProviderContext, Provider
 // ClinePass answers its recommended models in two lists: `clinePass` (paid) and
 // `free`. A free model is shown with " (free)" after its name. Its requests
 // mirror the Cline client's headers, so the service accepts them.
+//
+// The API takes only `modelType/model` ids (`cline-pass/glm-5.3`,
+// `nvidia/nemotron-3.5-lightning-free`) and answers a bare one with HTTP 400. A
+// paid id loses its `cline-pass/` in the `provider/model` id, so a request puts it
+// back on any id without a slash. A free id keeps its own prefix.
 
 const BASE_URL = "https://api.cline.bot/api/v1";
 
@@ -66,6 +71,10 @@ const models: ModelSource = {
   },
 };
 
+export function clinePassRequestModel(model: string): string {
+  return model.includes("/") ? model : `cline-pass/${model}`;
+}
+
 export const clinePass: ProviderPlugin = {
   identity: {
     id: "cline-pass",
@@ -76,4 +85,5 @@ export const clinePass: ProviderPlugin = {
   login: apiKeyLogin({ validate: keyCheck(`${BASE_URL}/users/me`, clientHeaders) }),
   models,
   wire: () => ({ wire: "openai-completions", baseUrl: BASE_URL }),
+  requestModel: clinePassRequestModel,
 };

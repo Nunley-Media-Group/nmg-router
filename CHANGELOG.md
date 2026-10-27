@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-27
+
+### Fixed
+
+- Fix ClinePass HTTP 400 on paid models and arrow-key navigation in the /model hub (#31)
+
 ## [0.10.1] - 2026-10-27
 
 ### Fixed

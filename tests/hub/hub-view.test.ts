@@ -45,47 +45,45 @@ function draw(current: HubState, actions: HubActions, recent: Record<string, num
 }
 
 describe("hub view", () => {
-  it("draws the sidebar entries with no matches as dim text, not buttons", () => {
+  // A pane scrolls its body on the arrows and lets the left arrow through to the prompt;
+  // a Select keeps every arrow, so the providers and the models are each one Select.
+  it("draws the providers and the models as one Select each, with no row buttons", () => {
     const { actions } = recordingActions();
-    const tree = draw(withQuery(state(), "kimi", sources, {}), actions);
-    const buttonKeys = nodesOf(tree, "Button").map((node) => node.props.key);
-    expect(buttonKeys).toContain("scope:all");
-    expect(buttonKeys).toContain("scope:opencode-go");
-    expect(buttonKeys).not.toContain("scope:claude");
-    expect(textOf(tree)).toContain("Claude (0)");
+    const tree = draw(state({ scope: "opencode-go", currentModel: "opencode-go/glm-5.1" }), actions);
+    expect(nodesOf(tree, "Button")).toEqual([]);
+    expect(nodesOf(tree, "Select").map((node) => node.props.key)).toEqual(["models", "scopes"]);
+    expect(keyed(tree, "scopes")?.props.value).toBe("opencode-go");
+    expect(keyed(tree, "scopes")?.props.options.map((option: { value: string }) => option.value)).toEqual([
+      "all",
+      "claude",
+      "openai-codex",
+      "opencode-go",
+      "xai",
+    ]);
+    expect(keyed(tree, "models")?.props.value).toBe("row:opencode-go/glm-5.1");
+    expect(keyed(tree, "models")?.props.autoFocus).toBe(true);
   });
 
-  it("draws each row with its id, the current mark, the window, the price and the speed", () => {
+  it("labels each option with its id, the current mark, the window, the price and the speed", () => {
     const { actions } = recordingActions();
     const current = state({ scope: "opencode-go", currentModel: "opencode-go/kimi-k3.1-pro" });
-    const tree = draw(current, actions);
-    const row = keyed(tree, "row:opencode-go/kimi-k3.1-pro");
-    expect(row).toBeDefined();
-    const rowText = textOf(row);
-    expect(rowText).toContain("kimi-k3.1-pro ✓");
-    expect(rowText).toContain("128k");
-    expect(rowText).toContain("$0.6/2.4");
-    expect(rowText).toContain("118t/s");
-    expect(textOf(keyed(tree, "row:opencode-go/glm-5.1"))).toContain("free");
+    const options = keyed(draw(current, actions), "models")?.props.options as { value: string; label: string }[];
+    const label = (value: string): string | undefined => options.find((option) => option.value === value)?.label;
+    expect(label("row:opencode-go/kimi-k3.1-pro")).toBe("kimi-k3.1-pro ✓  128k  $0.6/2.4  118t/s");
+    expect(label("row:opencode-go/glm-5.1")).toBe("glm-5.1          203k  free");
   });
 
-  // A Button runs its Text children together on the terminal, so the id and the
-  // columns are one padded line, aligned across the rows shown.
-  it("draws each row as one line with the columns apart from the id and aligned", () => {
+  it("counts the matches of a search in each provider's label", () => {
     const { actions } = recordingActions();
-    const tree = draw(state({ scope: "opencode-go" }), actions);
-    const labels = ["row:opencode-go/kimi-k3.1-pro", "row:opencode-go/glm-5.1"].map((key) => {
-      const texts = nodesOf(keyed(tree, key), "Text");
-      expect(texts).toHaveLength(1);
-      return textOf(texts[0]);
-    });
-    expect(labels[0]).toBe("kimi-k3.1-pro  128k  $0.6/2.4  118t/s");
-    expect(labels[1]).toBe("glm-5.1        203k  free");
+    const tree = draw(withQuery(state(), "kimi", sources, {}), actions);
+    const labels = (keyed(tree, "scopes")?.props.options as { label: string }[]).map((option) => option.label);
+    expect(labels).toContain("Claude (0)");
+    expect(labels).toContain("OpenCode Go (1)");
   });
 
-  // The host's focus ring keeps a position in document order, so nothing focusable may
-  // come before the search field, or a search that dims sidebar entries moves the ring.
-  it("draws the search field first in document order, before the sidebar, while the sidebar stays on the left", () => {
+  // The host's focus ring keeps a position in document order, so the search field and
+  // the models come before the providers, while the sidebar stays on the left.
+  it("draws the search field and the models before the providers, while the sidebar stays on the left", () => {
     const { actions } = recordingActions();
     for (const query of ["", "kimi"]) {
       const tree = draw(withQuery(state(), query, sources, {}), actions);
@@ -94,14 +92,17 @@ describe("hub view", () => {
         if (Array.isArray(value)) return value.forEach(visit);
         if (typeof value !== "object" || value === null) return;
         const node = value as { type?: string; props: { key?: string; children?: unknown } };
-        if (node.type === "Input" || node.type === "Button") inOrder.push(node.props.key ?? "");
+        if (node.type === "Input" || node.type === "Select") inOrder.push(node.props.key ?? "");
         visit(node.props.children);
       };
       visit(tree);
-      expect(inOrder[0]).toBe("search");
-      expect(inOrder.indexOf("scope:all")).toBeGreaterThan(0);
+      expect(inOrder).toEqual(["search", "models", "scopes"]);
       expect((tree as { props: { flexDirection?: string } }).props.flexDirection).toBe("row-reverse");
-      expect(focusableKeys(hubView(withQuery(state(), query, sources, {}), sources, {}))[0]).toBe("search");
+      expect(focusableKeys(hubView(withQuery(state(), query, sources, {}), sources, {}))).toEqual([
+        "search",
+        "models",
+        "scopes",
+      ]);
     }
   });
 
@@ -118,7 +119,7 @@ describe("hub view", () => {
     const { actions } = recordingActions();
     const tree = draw(state({ scope: "opencode-go", query: "kimi" }), actions);
     expect(keyed(tree, "search")?.props.value).toBe("kimi");
-    expect(textOf(tree)).toContain("Enter switch · Tab/↑↓ move · type to search · Esc clear/close");
+    expect(textOf(tree)).toContain("↑↓ choose · Enter switch · Tab providers/search · Esc clear/close");
   });
 
   it("draws the locked view with the no-credentials text, its bundled models and a focused login button", () => {
@@ -139,11 +140,12 @@ describe("hub view", () => {
     expect(textOf(tree)).toContain("No matching models.");
   });
 
-  it("routes each press to its action", () => {
+  it("routes each pick and the typing to its action", () => {
     const { actions, calls } = recordingActions();
     const tree = draw(state({ scope: "opencode-go" }), actions);
-    keyed(tree, "scope:opencode-go")?.props.onPress?.();
-    keyed(tree, "row:opencode-go/kimi-k3.1-pro")?.props.onPress?.();
+    keyed(tree, "scopes")?.props.onSelect?.("opencode-go");
+    keyed(tree, "models")?.props.onSelect?.("row:opencode-go/kimi-k3.1-pro");
+    keyed(tree, "models")?.props.onSelect?.("row:not-listed");
     keyed(tree, "search")?.props.onInput?.("kimi");
     expect(calls).toEqual(["scope:opencode-go", "pick:opencode-go/kimi-k3.1-pro", "query:kimi"]);
   });

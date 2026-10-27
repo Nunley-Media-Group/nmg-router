@@ -3,7 +3,7 @@ import { HUB_PANE_ID } from "../../src/hub/hub-controller.ts";
 import { handleModelCommand } from "../../src/hub/model-command.ts";
 import { loginToProvider } from "../../src/login/login-command.ts";
 import { drawnElements } from "../support/fake-engine.ts";
-import { hubHarness, keyed, settle, textOf } from "../support/hub-harness.ts";
+import { chooseScope, hubHarness, keyed, settle, textOf } from "../support/hub-harness.ts";
 
 // A locked provider's login hands off to its flow, which is replaced here by a saved login.
 vi.mock("../../src/login/login-command.ts", async (importOriginal) => {
@@ -20,7 +20,7 @@ describe("the hub's login hand-off", () => {
       vi.fn(),
       h.hub,
     );
-    keyed(h.hub.draw(drawnElements as never), "scope:xai")?.props.onPress?.();
+    chooseScope(h.hub.draw(drawnElements as never), "xai");
     // The faked login saves a credential, so the provider is no longer locked.
     vi.mocked(loginToProvider).mockImplementationOnce(async () => {
       (h.services.credentials as { list: unknown }).list = async () => [{ account: "default" }];
@@ -40,7 +40,7 @@ describe("the hub's login hand-off", () => {
     expect(h.engine.recorded.panes.every((pane) => pane.id === HUB_PANE_ID)).toBe(true);
     const drawn = h.hub.draw(drawnElements as never);
     expect(textOf(drawn)).not.toContain("has no credentials");
-    expect(keyed(drawn, "scope:xai")?.props.dimColor).toBe(false);
+    expect(keyed(drawn, "scopes")?.props.value).toBe("xai");
     expect(keyed(drawn, "search")).toBeDefined();
   });
 });

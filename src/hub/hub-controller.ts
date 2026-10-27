@@ -5,7 +5,7 @@ import { createPaneController, type PaneHold } from "../login/pane.ts";
 import type { SpeedMap } from "../routing/metrics.ts";
 import type { Services } from "../services.ts";
 import { ALL_SCOPE, hubView, isOverContext, withQuery, withScope, type HubState } from "./hub-state.ts";
-import { drawHub, focusableKeys, type HubActions, type HubElements } from "./hub-view.ts";
+import { drawHub, focusableKeys, homeKey, MODELS_KEY, type HubActions, type HubElements } from "./hub-view.ts";
 import { recentOf, RECENT_KEY, type RecentMap } from "./recent.ts";
 import { hubSources, type HubRow, type HubSource } from "./sources.ts";
 
@@ -35,7 +35,7 @@ export type HubController = {
   // Opens the hub on `scope`, reading the catalog, the credentials and the recent use first.
   open(host: HubHost, scope?: string): Promise<void>;
   draw(elements: HubElements): RenderElement;
-  // Called on `ui.focus`: a row button taking the ring shows its detail line.
+  // Called on `ui.focus`: records where the ring rests, so a redraw puts it back.
   focused(element: string | undefined): void;
   // Called on `ui.close`: true when a person's Esc only clears a non-empty search, so the close is refused.
   refusesClose(origin: { readonly kind: string }): boolean;
@@ -59,14 +59,14 @@ export function createHubController(services: Services): HubController {
 
   // The host's ring holds a position, so a redraw that changes the rows or the view
   // would move it onto another element, or off the pane. This puts it back by key: on
-  // the login button in the locked view, else where it was, else on the search field.
+  // the login button in the locked view, else where it was, else on the models.
   function keepRing(): void {
     const current = host;
     // A login drawn in the pane places its own ring.
     if (current === undefined || state === undefined || loggingIn()) return;
     const view = hubView(state, sources, recent);
     const keys = focusableKeys(view);
-    const key = view.mode === "locked" ? "login" : ring !== undefined && keys.includes(ring) ? ring : "search";
+    const key = view.mode === "locked" ? "login" : ring !== undefined && keys.includes(ring) ? ring : homeKey(view);
     current.ui.focus({ requestId: HUB_PANE_ID, key }).catch(() => undefined);
   }
 
@@ -212,9 +212,11 @@ export function createHubController(services: Services): HubController {
   }
 
   const actions: HubActions = {
+    // A provider picked from the sidebar hands the ring to its models.
     selectScope(id) {
       if (state === undefined) return;
       state = withScope(state, id, sources);
+      ring = MODELS_KEY;
       redraw();
       keepRing();
       void refreshScope(state.scope);
@@ -225,11 +227,10 @@ export function createHubController(services: Services): HubController {
       redraw();
     },
     pick: (row) => settle(() => pick(row)),
+    // Enter in the search field switches to the first row listed: the best match while searching.
     submit() {
       if (state === undefined) return;
-      const highlighted = state.highlighted;
-      const rows = hubView(state, sources, recent).rows;
-      const target = rows.find((row) => row.key === highlighted) ?? rows[0];
+      const target = hubView(state, sources, recent).rows[0];
       if (target !== undefined) settle(() => pick(target.row));
     },
     login: (providerId) => settle(() => login(providerId)),
@@ -240,12 +241,13 @@ export function createHubController(services: Services): HubController {
     draw(elements) {
       if (loggingIn()) return loginPane.draw(elements);
       if (state === undefined) return elements.Box({ children: [] });
-      return drawHub(elements, hubView(state, sources, recent), actions);
+      return drawHub(elements, hubView(state, sources, recent), actions, ring);
     },
+    // A Select away from the ring draws a preview of its options, so a move redraws.
     focused(element) {
+      if (ring === element) return;
       ring = element;
-      if (state === undefined || element === undefined || !element.startsWith("row:")) return;
-      if (state.highlighted !== element) patch({ highlighted: element });
+      redraw();
     },
     refusesClose(origin) {
       if (origin.kind === "person" && loggingIn()) {

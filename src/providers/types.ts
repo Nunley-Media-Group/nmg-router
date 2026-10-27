@@ -80,6 +80,9 @@ export type ProviderPlugin = {
   readonly login: LoginMethod;
   readonly models: ModelSource;
   readonly wire: WireResolver;
+  // The id a request names, from the model's own part of its `provider/model` id,
+  // when the provider's API takes another spelling than its list's.
+  readonly requestModel?: (model: string) => string;
 };
 
 export type CatalogModel = {

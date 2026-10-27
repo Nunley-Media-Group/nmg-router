@@ -13,7 +13,6 @@ export const ALL_SCOPE = "all";
 export type HubState = {
   readonly scope: string;
   readonly query: string;
-  readonly highlighted?: string;
   readonly view: "list" | "locked";
   readonly refreshing: ReadonlySet<string>;
   readonly currentModel: string;
@@ -45,6 +44,8 @@ export type HubView = {
   readonly query: string;
   readonly sidebar: readonly SidebarEntry[];
   readonly rows: readonly VisibleRow[];
+  // The row the models list draws selected: the current model's when shown, else the first.
+  readonly selected?: string;
   readonly detail?: string;
   readonly notice?: string;
   readonly locked?: { readonly id: string; readonly label: string; readonly rows: readonly HubRow[] };
@@ -201,21 +202,21 @@ export function hubView(state: HubState, sources: readonly HubSource[], recent: 
     };
   }
   const rows = scopedRows(state, sources, recent).map((row) => visibleRow(row, state));
-  const highlighted = rows.find((candidate) => candidate.key === state.highlighted) ?? rows[0];
+  const selected = rows.find((candidate) => candidate.current) ?? rows[0];
   return {
     mode: "list",
     scope: state.scope,
     query: state.query,
     sidebar,
     rows,
-    ...(highlighted === undefined ? {} : { detail: detailLine(highlighted.row) }),
+    ...(selected === undefined ? {} : { selected: selected.key, detail: detailLine(selected.row) }),
     ...(state.notice === undefined ? {} : { notice: state.notice }),
   };
 }
 
 // The query with the search applied: an active scope with no matches falls back to all models.
 export function withQuery(state: HubState, query: string, sources: readonly HubSource[], recent: RecentMap): HubState {
-  const next: HubState = { ...state, query, highlighted: undefined, notice: undefined };
+  const next: HubState = { ...state, query, notice: undefined };
   if (state.scope === ALL_SCOPE || !isSearching(query)) return next;
   const matches = searchRows(rowsOf(state.scope, sources), query, recent).length;
   return matches === 0 ? { ...next, scope: ALL_SCOPE, view: "list" } : next;
@@ -225,7 +226,7 @@ export function withQuery(state: HubState, query: string, sources: readonly HubS
 export function withScope(state: HubState, scope: string, sources: readonly HubSource[]): HubState {
   const source = sourceOf(scope, sources);
   if (scope === ALL_SCOPE || source === undefined) {
-    return { ...state, scope: ALL_SCOPE, view: "list", highlighted: undefined, notice: undefined };
+    return { ...state, scope: ALL_SCOPE, view: "list", notice: undefined };
   }
-  return { ...state, scope, view: source.isLocked() ? "locked" : "list", highlighted: undefined, notice: undefined };
+  return { ...state, scope, view: source.isLocked() ? "locked" : "list", notice: undefined };
 }

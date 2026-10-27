@@ -330,7 +330,8 @@ export function createRouter(
       token: context.auth?.token,
       sessionId: context.sessionId,
     };
-    const spec = adapter.encode(request, adapterContext);
+    const requested = plugin.requestModel?.(request.model) ?? request.model;
+    const spec = adapter.encode({ ...request, model: requested }, adapterContext);
     if (new URL(spec.url).host !== new URL(resolved.baseUrl).host) {
       throw new Error("a routed request named a host other than the provider's");
     }
