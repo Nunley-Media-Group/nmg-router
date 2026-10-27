@@ -14,6 +14,12 @@ Feature: Bounded in-place summary and a status line that follows the model
     When 120 seconds pass after the summary request is sent
     Then the request is aborted, the routed view is unchanged, the transcript shows "OpenCode Go could not summarize this conversation (timed_out); it will be retried at the next turn end.", and the next routed main-loop step runs
 
+  @SCN006 @regression
+  Scenario: A routed step does not wait for a running summary
+    Given an in-place summary for "opencode-go/kimi-k3.1-pro" is still running
+    When a routed main-loop step starts
+    Then the step answers at once with the routed view as it is, and the summary, once it finishes, is sent from the next routed main-loop step
+
   @SCN002 @regression
   Scenario: A timed-out summary is retried at the next turn end
     Given an in-place summary that timed out
