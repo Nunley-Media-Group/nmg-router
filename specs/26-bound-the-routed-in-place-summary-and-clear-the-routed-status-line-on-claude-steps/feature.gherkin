@@ -1,0 +1,39 @@
+**Issue**: #26
+**Date**: 2026-10-27
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/4-keep-routed-sessions-working-with-routed-compaction-subagents-and-auto-mode-permissions/
+
+# File: tests/features/routed-sessions.feature
+# Generated from: specs/26-bound-the-routed-in-place-summary-and-clear-the-routed-status-line-on-claude-steps/requirements.md
+Feature: Bounded in-place summary and a status line that follows the model
+
+  @SCN001 @regression
+  Scenario: A stalled in-place summary times out
+    Given "opencode-go/kimi-k3.1-pro" is over the auto-compaction threshold and OpenCode Go accepts the summary request and then sends nothing
+    When 120 seconds pass after the summary request is sent
+    Then the request is aborted, the routed view is unchanged, the transcript shows "OpenCode Go could not summarize this conversation (timed_out); it will be retried at the next turn end.", and the next routed main-loop step runs
+
+  @SCN002 @regression
+  Scenario: A timed-out summary is retried at the next turn end
+    Given an in-place summary that timed out
+    When the next main-loop turn ends with the context still over the threshold
+    Then the in-place summary is sent again
+
+  @SCN003 @regression
+  Scenario: A summary within the deadline is kept as before
+    Given OpenCode Go returns the summary before 120 seconds pass
+    When the in-place summary runs
+    Then the summary is kept in the routed view and no timeout line is logged
+
+  @SCN004 @regression
+  Scenario: A Claude main-loop step clears the routed status line
+    Given a routed main-loop step on "opencode-go/kimi-k3.1-pro" set the status line
+    When the next main-loop step runs on "claude-haiku-5-5"
+    Then nmg-router's status line is cleared
+
+  @SCN005 @regression
+  Scenario: Routed and subagent status behavior is preserved
+    Given a routed main loop, and a subagent step on a Claude or routed model
+    When each step completes or fails
+    Then the routed main-loop step sets the model and thinking status or the error status, and the subagent step leaves the status line as it is
