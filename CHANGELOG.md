@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-27
+
+### Changed
+
+- Document install and usage and package the marketplace (#6)
+
 ## [0.9.0] - 2026-10-27
 
 ### Changed

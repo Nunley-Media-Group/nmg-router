@@ -6,6 +6,106 @@ Claude models keep using your own Claude login, sent straight to Anthropic by Cl
 
 Status: early development.
 
+## Requirements
+
+- Claude Code 2.1.310 or later.
+- Nothing else needs installing: there is no proxy, service, port or separate app to run.
+- A system `curl` gives streaming replies. Without it, replies arrive whole.
+
+## Installation
+
+In Claude Code, run these two commands:
+
+```text
+/plugin marketplace add Nunley-Media-Group/nmg-plugins
+/plugin install nmg-router@nmg-plugins
+```
+
+Update with `/plugin marketplace update nmg-plugins`, and uninstall with `/plugin uninstall nmg-router@nmg-plugins`.
+
+To try a local checkout of this repository instead, run `claude --plugin-dir .` from its root.
+
+## Logging in to providers
+
+Run `/login` to open "Select provider to login". It lists Anthropic and every enabled provider, with each one's login status.
+
+- Choosing Anthropic runs Claude Code's own login, unchanged.
+- OpenCode Go, ClinePass and xAI take an API key. The key is masked as you type and checked before it is saved.
+- OpenAI Codex (ChatGPT plan) signs in with OAuth. Paste the redirect URL or the code it gives you.
+
+Run `/logout` to remove a login. It lists Anthropic and each provider with stored credentials, and marks the `(active)` account.
+
+## Choosing a model
+
+Run `/model` with no arguments to open the model hub. It lists "All models", then Claude, then each provider with its model count. A provider you have not logged in to is dimmed and offers "Log in to …".
+
+- Type to search. Enter selects the highlighted model. Esc clears the search, and a second Esc closes the hub.
+- A routed model id is `provider/model`, such as `opencode-go/kimi-k3.1-pro`. `/model <id>` switches straight to one.
+- Switching models keeps the conversation.
+
+Routed models also appear in Claude Code's own picker. The mod keeps a `modelPicker` row for each one in your user settings, because Claude Code lists only model ids containing "claude" on its own.
+
+## Thinking levels
+
+Set the effort level with Claude Code's effort setting, as you would for Claude. The mod sends each provider's own reasoning field, and the level is clamped to what the routed model supports: `max` becomes `medium` on a model that supports only `low` and `medium`. A model with no reasoning levels gets none.
+
+The status line shows the routed model and the effective level.
+
+## Auto-mode permissions
+
+The `/config` row "Routed auto-mode permissions" (`routedAutoPermissions`) decides how auto mode handles tool calls from routed models.
+
+- `claude-classifier` asks a Claude model to answer allow, ask or deny for each routed call that no rule settles.
+- `server-classifier-off` answers ask, so Claude Code's own permission dialog decides.
+
+Unset, the row is `claude-classifier` when you have a Claude login and `server-classifier-off` when you do not. Rules and calls to Claude models are unchanged.
+
+## Custom providers and filters
+
+The mod reads `config.json` from the folder for your OS:
+
+- macOS: `~/Library/Application Support/nmg-router/config.json`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/nmg-router/config.json`
+- Windows: `%APPDATA%\nmg-router\config.json`
+
+This example adds a custom provider, hides the xAI provider with `disabledProviders`, and limits the models shown with `enabledModels`:
+
+```json
+{
+  "providers": {
+    "my-relay": {
+      "name": "My Relay",
+      "baseUrl": "https://relay.example.com/v1",
+      "api": "openai-completions",
+      "auth": "api-key",
+      "headers": { "X-Title": "nmg-router" },
+      "models": [{ "id": "glm-5.1", "name": "GLM 5.1", "contextWindow": 200000, "maxOutput": 32000, "reasoningEfforts": ["low", "high"], "vision": false, "price": { "input": 0.5, "output": 2 } }]
+    }
+  },
+  "disabledProviders": ["xai"],
+  "enabledModels": ["opencode-go/glm-*", "my-relay/*"]
+}
+```
+
+- `api` is `openai-completions`, `openai-responses` or `anthropic-messages`. `auth` is `api-key` (the default) or `none`.
+- `enabledModels` patterns match `provider/model` or the bare model id, ignoring case. `*` matches any run of characters and `?` matches one. Leave it out to allow every model.
+- The file never holds a key. An entry that holds a key, a token, a password or an authorization header is rejected, and nothing from it is registered. Run `/login` to store a key.
+
+## Known limits
+
+- Routed models are weaker than Claude at Claude Code's tool use.
+- Background work such as session titles still uses Claude.
+- MCP tools are sent only when the mods API exposes their schema.
+- The mods API is new and may change between Claude Code releases.
+- Using the ChatGPT plan through the Codex login carries a small OpenAI-side account risk.
+- A failed routed request shows an error. It never falls back to another provider or to Claude.
+
+## Credential boundary
+
+Claude credentials stay with Claude Code: Claude models go straight to Anthropic on your own login, and the mod never reads, stores or forwards that login.
+
+Provider credentials stay in the encrypted vault (see Credential security). They never reach Claude Code's settings, logs, `config.json` or the mod's own store.
+
 ## Credential security
 
 Provider credentials are kept in the encrypted vault on every OS. They never go into Claude Code's settings, logs, fixtures or the mod's own store. Anthropic and Claude credentials are never stored, and the mod never reads them.
