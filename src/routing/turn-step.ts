@@ -2,7 +2,8 @@ import type { HookStream, TurnStepChunk, TurnStepInput, TurnStepResult } from "c
 import type { Router } from "./router.ts";
 
 // The bodies of the `turn.step` hook and its `.catch`. A Claude step passes
-// through to `next` unchanged. A routed step is answered here, and `next` is never
+// through to `next` unchanged, after it clears any routed status line the main loop
+// left. A routed step is answered here, and `next` is never
 // called for it, so a failure cannot send the step to Claude.
 
 export type StepNext = {
@@ -16,7 +17,10 @@ export async function* routeStep(
   next: StepNext,
 ): AsyncGenerator<TurnStepChunk, TurnStepResult | void> {
   router.observe(e);
-  if (!(await router.isRouted(e.model))) return yield* next(e);
+  if (!(await router.isRouted(e.model))) {
+    router.claudeStep(e);
+    return yield* next(e);
+  }
   return yield* router.answer(e, next.signal);
 }
 
@@ -27,6 +31,9 @@ export async function* routeStepFailed(
   next: StepNext & { readonly error?: unknown },
 ): AsyncGenerator<TurnStepChunk, TurnStepResult | void> {
   router.observe(e);
-  if (!(await router.isRouted(e.model))) return yield* next(e);
+  if (!(await router.isRouted(e.model))) {
+    router.claudeStep(e);
+    return yield* next(e);
+  }
   return yield* router.fail(e, next.error);
 }

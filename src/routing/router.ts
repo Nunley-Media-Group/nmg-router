@@ -79,6 +79,8 @@ export type Router = {
   isRouted(model: string): Promise<boolean>;
   // Notes the step's model for its loop. Called for every step, Claude's too.
   observe(e: TurnStepInput): void;
+  // Called before a Claude step passes to `next`. A main-loop step clears the status line a routed step set.
+  claudeStep(e: TurnStepInput): void;
   answer(e: TurnStepInput, signal: AbortSignal): AsyncGenerator<TurnStepChunk, TurnStepResult>;
   // The `.catch` path: a hook failed on a routed step, so its message is answered.
   fail(e: TurnStepInput, error: unknown): AsyncGenerator<TurnStepChunk, TurnStepResult>;
@@ -257,6 +259,8 @@ export function createRouter(
   let loaded: Promise<void> | undefined;
   let version: Promise<string> | undefined;
   const steps = new Map<string, Progress>();
+  // True while the status line shows a routed main-loop step's text.
+  let statusShown = false;
 
   async function providerOf(model: string): Promise<ProviderPlugin | undefined> {
     const parsed = parseModelId(model);
@@ -383,8 +387,8 @@ export function createRouter(
   }
 
   // The answer for a failed step: its message as text, then an end of turn. The
-  // status line shows the error until a later step succeeds. A subagent's failure
-  // leaves the status line as it is.
+  // status line shows the error until a later routed step succeeds or a Claude
+  // main-loop step clears it. A subagent's failure leaves the status line as it is.
   async function* failure(
     e: TurnStepInput,
     name: string,
@@ -394,7 +398,10 @@ export function createRouter(
   ): AsyncGenerator<TurnStepChunk, TurnStepResult> {
     if (signal.aborted) return { turnId: e.turnId, index: e.index, answer: "", toolUses: [], stopReason: "end_turn", usage: null };
     const routed = toRouted(name, error);
-    if (e.agentId === undefined) host.ui.status(errorStatusText(e.model, name, routed.kind));
+    if (e.agentId === undefined) {
+      host.ui.status(errorStatusText(e.model, name, routed.kind));
+      statusShown = true;
+    }
     yield { kind: "text", index: blocks, text: routed.message };
     yield { kind: "stop", stopReason: "end_turn", usage: null };
     return { turnId: e.turnId, index: e.index, answer: routed.message, toolUses: [], stopReason: "end_turn", usage: null };
@@ -450,7 +457,10 @@ export function createRouter(
     if (reply.aborted) return resultOf(e, reply.tally);
 
     // Only the main loop moves the status line; a subagent's steps leave it as it is.
-    if (e.agentId === undefined) host.ui.status(statusText(e.model, thinkingOf(supported, effort)));
+    if (e.agentId === undefined) {
+      host.ui.status(statusText(e.model, thinkingOf(supported, effort)));
+      statusShown = true;
+    }
     const usage = reply.tally.stop?.usage;
     if (usage) tracker.recordUsage(e.agentId ?? MAIN_LOOP, usage);
     await remember(
@@ -467,6 +477,12 @@ export function createRouter(
 
     observe(e) {
       tracker.recordStep(e.agentId ?? MAIN_LOOP, e.model);
+    },
+
+    claudeStep(e) {
+      if (e.agentId !== undefined || !statusShown) return;
+      statusShown = false;
+      host.ui.status(undefined);
     },
 
     async *answer(e, signal) {
