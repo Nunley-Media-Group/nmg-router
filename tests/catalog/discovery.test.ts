@@ -103,6 +103,27 @@ describe("ClinePass discovery", () => {
     expect(models[0]).toMatchObject({ wire: "openai-completions", baseUrl: "https://api.cline.bot/api/v1" });
     expect(engine.recorded.http[0]?.headers["X-PLATFORM"]).toBe("linux");
   });
+
+  it("names a model the list names by its id after the bare model", async () => {
+    const list = JSON.stringify({
+      clinePass: [{ id: "cline-pass/qwen3.7-max", name: "cline-pass/qwen3.7-max" }],
+      free: [{ id: "cline-free/solar-mini4", name: "cline-free/solar-mini4" }],
+    });
+    const { engine, services } = harness({
+      platform: "linux",
+      http: (request) =>
+        request.url === "https://api.cline.bot/api/v1/ai/cline/recommended-models" ? json(list) : undefined,
+    });
+    await storeApiKey(engine, "cline-pass", "fixture-key");
+    await services.catalog.load();
+    await services.catalog.refresh("cline-pass");
+
+    const names = services.catalog.models().map((model) => [model.id, model.name]);
+    expect(names).toEqual([
+      ["cline-pass/qwen3.7-max", "qwen3.7-max"],
+      ["cline-pass/cline-free/solar-mini4", "solar-mini4 (free)"],
+    ]);
+  });
 });
 
 describe("xAI discovery", () => {

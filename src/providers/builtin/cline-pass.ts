@@ -35,9 +35,16 @@ function idOf(entry: unknown): string | undefined {
   return typeof id === "string" && id.trim() !== "" ? id : undefined;
 }
 
-function nameOf(entry: unknown): string | undefined {
+// The service names some models by their id. That is no name: the catalog then
+// falls back to the model's metadata name, else the bare model.
+function nameOf(entry: unknown, id: string): string | undefined {
   const name = (entry as { name?: unknown }).name;
-  return typeof name === "string" && name.trim() !== "" ? name : undefined;
+  return typeof name === "string" && name.trim() !== "" && name !== id ? name : undefined;
+}
+
+// The id without its `modelType/` prefix.
+function bareOf(id: string): string {
+  return id.slice(id.lastIndexOf("/") + 1);
 }
 
 // Duplicates across the two lists keep their first entry: the paid one.
@@ -51,11 +58,11 @@ export function parseClinePassList(body: unknown): RawModel[] | undefined {
   const models = new Map<string, RawModel>();
   for (const entry of paid ?? []) {
     const id = idOf(entry);
-    if (id !== undefined && !models.has(id)) models.set(id, { id, name: nameOf(entry) });
+    if (id !== undefined && !models.has(id)) models.set(id, { id, name: nameOf(entry, id) });
   }
   for (const entry of free ?? []) {
     const id = idOf(entry);
-    if (id !== undefined && !models.has(id)) models.set(id, { id, name: `${nameOf(entry) ?? id} (free)` });
+    if (id !== undefined && !models.has(id)) models.set(id, { id, name: `${nameOf(entry, id) ?? bareOf(id)} (free)` });
   }
   return [...models.values()];
 }

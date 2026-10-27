@@ -1,0 +1,27 @@
+**Issue**: #33
+**Date**: 2026-10-27
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/31-fix-clinepass-http-400-on-paid-models-and-arrow-key-navigation-in-the-model-hub/
+
+# File: tests/features/catalog.feature
+# Generated from: specs/33-name-clinepass-models-by-their-model-not-their-id/requirements.md
+Feature: ClinePass models are named by their model, not their id
+
+  @SCN001 @regression
+  Scenario: A paid model named by its id is named by its model
+    Given ClinePass lists "cline-pass/qwen3.7-max" named "cline-pass/qwen3.7-max"
+    When the catalog refreshes
+    Then the model is named "qwen3.7-max"
+
+  @SCN002 @regression
+  Scenario: A free model named by its id is named by its bare model
+    Given ClinePass's free list has "cline-free/solar-mini4" named "cline-free/solar-mini4"
+    When the catalog refreshes
+    Then the model is named "solar-mini4 (free)"
+
+  @SCN003 @regression
+  Scenario: A real name is kept
+    Given ClinePass's free list has "cline-pass/deepseek-v4-flash" named "DeepSeek V4 Flash"
+    When the catalog refreshes
+    Then the model is named "DeepSeek V4 Flash (free)"
