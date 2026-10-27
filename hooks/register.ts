@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from "claude-code";
+import type { HostPort } from "../src/host.ts";
 import { createAutoTrigger, type AutoTrigger, type TriggerDeps } from "../src/compaction/auto-trigger.ts";
 import { compactFailure, compactSession, type CompactDeps } from "../src/compaction/compact-hook.ts";
 import { createRoutedView } from "../src/compaction/routed-view.ts";
@@ -10,18 +11,22 @@ import { createPersonApproval } from "../src/permissions/person-approval.ts";
 import { createPermissionModeTracker } from "../src/permissions/permission-mode.ts";
 import { createModeReader, type PermissionMode } from "../src/permissions/mode.ts";
 import { checkFailed, checkRoutedTool, type ToolCheckDeps } from "../src/permissions/tool-check.ts";
+import { createHubController, HUB_PANE_ID, type HubController, type HubHost } from "../src/hub/hub-controller.ts";
+import { handleModelCommand } from "../src/hub/model-command.ts";
+import { watchModelPickerRows } from "../src/hub/settings-rows.ts";
 import { createComposeCapture } from "../src/routing/compose-capture.ts";
 import { createRouter, type Router, type RouterHost } from "../src/routing/router.ts";
 import { createSessionTracker } from "../src/routing/session-tracker.ts";
 import { routeStep, routeStepFailed } from "../src/routing/turn-step.ts";
-import { createServices } from "../src/services.ts";
+import { createServices, type Services } from "../src/services.ts";
 
-// Wires /login, /logout, the login pane, the routed turns, routed compaction and
-// routed auto-mode permissions to src/. The host reads a name, key or path only
-// where it is written literally at a call site, so the port spells out each
+// Wires /login, /logout, the login pane, the model hub, the routed turns, routed
+// compaction and routed auto-mode permissions to src/. The host reads a name, key or
+// path only where it is written literally at a call site, so the port spells out each
 // environment name and store key the mod uses. One pane serves the engine: a
 // command opens it, and the render and close hooks draw it and settle it. The
 // command hook opens the pane, answers, and the flow runs after it (command-flow.ts).
+// The hub's pane is drawn by its own hooks, and its picks run after the hook answers.
 // The turn hooks answer routed models and pass Claude through. The compaction and
 // permission hooks answer routed calls and pass Claude's through.
 
@@ -37,6 +42,8 @@ function hostPort($: EngineInterface): RouterHost {
         switch (name) {
           case "APPDATA":
             return $.env.get("APPDATA");
+          case "CLAUDE_CONFIG_DIR":
+            return $.env.get("CLAUDE_CONFIG_DIR");
           case "DBUS_SESSION_BUS_ADDRESS":
             return $.env.get("DBUS_SESSION_BUS_ADDRESS");
           case "HOME":
@@ -45,6 +52,8 @@ function hostPort($: EngineInterface): RouterHost {
             return $.env.get("LOCALAPPDATA");
           case "OS":
             return $.env.get("OS");
+          case "USERPROFILE":
+            return $.env.get("USERPROFILE");
           case "XDG_CONFIG_HOME":
             return $.env.get("XDG_CONFIG_HOME");
           case "XDG_DATA_HOME":
@@ -77,6 +86,8 @@ function hostPort($: EngineInterface): RouterHost {
             return $.store.get("credentials.index");
           case "metrics.speed":
             return $.store.get("metrics.speed");
+          case "models.recent":
+            return $.store.get("models.recent");
           default:
             throw unknownName("store key", key);
         }
@@ -93,6 +104,8 @@ function hostPort($: EngineInterface): RouterHost {
             return $.store.set("credentials.index", value);
           case "metrics.speed":
             return $.store.set("metrics.speed", value);
+          case "models.recent":
+            return $.store.set("models.recent", value);
           default:
             throw unknownName("store key", key);
         }
@@ -109,6 +122,8 @@ function hostPort($: EngineInterface): RouterHost {
             return $.store.delete("credentials.index");
           case "metrics.speed":
             return $.store.delete("metrics.speed");
+          case "models.recent":
+            return $.store.delete("models.recent");
           default:
             throw unknownName("store key", key);
         }
@@ -139,6 +154,25 @@ function hostPort($: EngineInterface): RouterHost {
   };
 }
 
+// The model hub's port: the host port, plus the toast, the session's usage and
+// `/model` runs. Each function calls the engine at its own call site.
+function hubHost($: EngineInterface): HubHost {
+  const port = hostPort($);
+  return {
+    env: port.env,
+    fs: port.fs,
+    http: port.http,
+    process: port.process,
+    store: port.store,
+    ui: { ...port.ui, toast: (text) => $.ui.toast(text) },
+    session: {
+      model: () => $.session.model(),
+      usage: () => $.session.usage(),
+    },
+    command: { run: (input) => $.command.run(input) },
+  };
+}
+
 export const register: Register = (on, options) => {
   const pane = createPaneController();
   const flows = createCommandFlows();
@@ -150,6 +184,19 @@ export const register: Register = (on, options) => {
   const askPerson = createPersonApproval();
   let router: Router | undefined;
   let trigger: AutoTrigger | undefined;
+  let hub: HubController | undefined;
+
+  // One services set per engine, shared by the login hooks and the model hub, so a
+  // catalog refresh from either one also syncs the model picker rows in settings.json.
+  let shared: Services | undefined;
+  const servicesFor = (host: HostPort): Services => {
+    if (shared !== undefined) return shared;
+    const services = createServices(host, { pane });
+    watchModelPickerRows(services.catalog, host, services.platform);
+    shared = services;
+    return services;
+  };
+  const hubFor = (host: HubHost): HubController => (hub ??= createHubController(servicesFor(host)));
 
   // The router and the compaction and permission deps share one host, the first one
   // a hook built, as the router always has. They take a port, never `$`.
@@ -198,7 +245,7 @@ export const register: Register = (on, options) => {
         },
       },
     };
-    const services = createServices(port, { pane });
+    const services = servicesFor(port);
     return flows.start(flowHost, e, pane, (handoff) =>
       e.command === "login" ? handleLogin(port, e, handoff, services) : handleLogout(port, e, handoff, services),
     );
@@ -263,6 +310,28 @@ export const register: Register = (on, options) => {
 
   on("ui.close", { id: PANE_ID }, (_, e, next) => {
     pane.closedByHost();
+    return next(e);
+  });
+
+  // `/model` with no arguments opens the hub; with one, it switches through core's own /model.
+  on("command.run", { command: "model" }, ($, e, next) => {
+    const host = hubHost($);
+    return handleModelCommand(host, e, next, hubFor(host));
+  });
+
+  on("ui.render", { component: "Pane", requestId: HUB_PANE_ID }, ($, e, next) => {
+    if (e.surface !== "terminal" || hub === undefined) return next(e);
+    return hub.draw($.ui.resolve(e));
+  });
+
+  // A row taking the focus shows its detail line; the hub's Esc refuses a close that only clears a search.
+  on("ui.focus", { requestId: HUB_PANE_ID }, ($, e, next) => {
+    hub?.focused(e.element);
+    return next(e);
+  });
+
+  on("ui.close", { id: HUB_PANE_ID }, (_, e, next) => {
+    if (hub?.refusesClose(e.origin) === true) return { deny: "The search was cleared first." };
     return next(e);
   });
 };

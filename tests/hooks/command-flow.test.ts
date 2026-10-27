@@ -16,11 +16,14 @@ const NARROW = 91;
 type Hook = (...args: unknown[]) => unknown;
 type Node = { readonly props: Record<string, unknown> };
 
+// This map holds one hook per event. The login flow registers first for each event
+// it uses, and the model hub's hooks, registered later for the same events, are
+// another feature's, so the first registration is the flow's.
 function registered() {
   const hooks = new Map<string, Hook>();
   const catches = new Map<string, Hook>();
   const on = ((event: string, matcher: unknown, hook?: unknown) => {
-    hooks.set(event, (typeof matcher === "function" ? matcher : hook) as Hook);
+    if (!hooks.has(event)) hooks.set(event, (typeof matcher === "function" ? matcher : hook) as Hook);
     return { catch: (handler: Hook) => catches.set(event, handler) };
   }) as unknown as Parameters<typeof register>[0];
   register(on, {} as never);

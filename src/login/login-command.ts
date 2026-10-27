@@ -16,6 +16,9 @@ const TITLE = "Select provider to login";
 
 type Host = Pick<HostPort, "ui" | "process">;
 
+// What a login run answers: whether a credential was saved, and the line to show.
+export type LoginOutcome = { readonly ok: boolean; readonly text: string };
+
 async function statusOf(services: Services, plugin: ProviderPlugin): Promise<string | undefined> {
   if (plugin.login.kind === "none") return undefined;
   const stored = await services.credentials.list(plugin.identity.id);
@@ -56,9 +59,9 @@ async function openBrowser(host: Host, platform: string, url: string): Promise<v
   }
 }
 
-async function apiKeyFlow(host: Host, plugin: ProviderPlugin, services: Services): Promise<CommandRunResult> {
+async function apiKeyFlow(host: Host, plugin: ProviderPlugin, services: Services): Promise<LoginOutcome> {
   const { identity, login } = plugin;
-  if (login.kind !== "api-key") return { text: `${identity.name} needs no login.` };
+  if (login.kind !== "api-key") return { ok: false, text: `${identity.name} needs no login.` };
 
   const picked = await services.pane.open(host, {
     kind: "secret",
@@ -66,7 +69,7 @@ async function apiKeyFlow(host: Host, plugin: ProviderPlugin, services: Services
     label: `${identity.name} API key`,
     hint: ["The key is checked against the provider before it is saved."],
   });
-  if (picked.kind !== "submitted") return { text: "Login cancelled." };
+  if (picked.kind !== "submitted") return { ok: false, text: "Login cancelled." };
 
   try {
     const text = await runApiKeyLogin(
@@ -77,16 +80,16 @@ async function apiKeyFlow(host: Host, plugin: ProviderPlugin, services: Services
       await services.platform(),
       (providerId) => services.catalog.refresh(providerId),
     );
-    return { text };
+    return { ok: true, text };
   } catch (error) {
-    if (error instanceof LoginError || error instanceof CredentialError) return { text: error.message };
+    if (error instanceof LoginError || error instanceof CredentialError) return { ok: false, text: error.message };
     throw error;
   }
 }
 
-async function oauthFlow(host: Host, plugin: ProviderPlugin, services: Services): Promise<CommandRunResult> {
+async function oauthFlow(host: Host, plugin: ProviderPlugin, services: Services): Promise<LoginOutcome> {
   const { identity, login } = plugin;
-  if (login.kind !== "oauth-code") return { text: `${identity.name} needs no login.` };
+  if (login.kind !== "oauth-code") return { ok: false, text: `${identity.name} needs no login.` };
 
   const begun: OAuthBegin = await beginOAuth(login.config);
   host.ui.log(`Sign in to ${identity.name}: ${begun.url}`);
@@ -101,7 +104,7 @@ async function oauthFlow(host: Host, plugin: ProviderPlugin, services: Services)
   });
   await openBrowser(host, await services.platform(), begun.url);
   const picked = await answer;
-  if (picked.kind !== "submitted") return { text: "Login cancelled." };
+  if (picked.kind !== "submitted") return { ok: false, text: "Login cancelled." };
 
   try {
     const text = await completeOAuth(
@@ -112,11 +115,22 @@ async function oauthFlow(host: Host, plugin: ProviderPlugin, services: Services)
       picked.value,
       (providerId) => services.catalog.refresh(providerId),
     );
-    return { text: text ?? "Nothing was pasted; nothing was saved." };
+    if (text === undefined) return { ok: false, text: "Nothing was pasted; nothing was saved." };
+    return { ok: true, text };
   } catch (error) {
-    if (error instanceof LoginError || error instanceof CredentialError) return { text: error.message };
+    if (error instanceof LoginError || error instanceof CredentialError) return { ok: false, text: error.message };
     throw error;
   }
+}
+
+// Logs one enabled provider in, by the flow its login method names. The model hub
+// runs it for a locked provider; `/login` runs it for a picked one.
+export async function loginToProvider(host: Host, providerId: string, services: Services): Promise<LoginOutcome> {
+  const plugin = services.catalog.enabledProviders().find((entry) => entry.identity.id === providerId);
+  if (plugin === undefined) return { ok: false, text: "Login cancelled." };
+  if (plugin.login.kind === "api-key") return apiKeyFlow(host, plugin, services);
+  if (plugin.login.kind === "oauth-code") return oauthFlow(host, plugin, services);
+  return { ok: false, text: `${plugin.identity.name} needs no login.` };
 }
 
 export async function handleLogin(
@@ -130,9 +144,6 @@ export async function handleLogin(
   if (picked.kind !== "picked") return { text: "Login cancelled." };
   if (picked.value === ANTHROPIC) return next(input);
 
-  const plugin = services.catalog.enabledProviders().find((entry) => entry.identity.id === picked.value);
-  if (plugin === undefined) return { text: "Login cancelled." };
-  if (plugin.login.kind === "api-key") return apiKeyFlow(host, plugin, services);
-  if (plugin.login.kind === "oauth-code") return oauthFlow(host, plugin, services);
-  return { text: `${plugin.identity.name} needs no login.` };
+  const outcome = await loginToProvider(host, picked.value, services);
+  return { text: outcome.text };
 }

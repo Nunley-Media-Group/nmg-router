@@ -1,0 +1,206 @@
+import type { CommandRunArgs, RenderElement } from "claude-code";
+import type { HostPort } from "../host.ts";
+import { loginToProvider } from "../login/login-command.ts";
+import type { SpeedMap } from "../routing/metrics.ts";
+import type { Services } from "../services.ts";
+import { ALL_SCOPE, hubView, isOverContext, withQuery, withScope, type HubState } from "./hub-state.ts";
+import { drawHub, type HubActions, type HubElements } from "./hub-view.ts";
+import { recentOf, RECENT_KEY, type RecentMap } from "./recent.ts";
+import { hubSources, type HubRow, type HubSource } from "./sources.ts";
+
+// The hub's one pane. Its state lives here; the pane's closures and the hooks change
+// it and redraw. A pick the transcript does not fit is refused and the pane stays open;
+// any other pick closes the pane and runs `/model <id>` through the command hook.
+
+export const HUB_PANE_ID = "nmg-router-models";
+const HUB_TITLE = "Models";
+const SPEED_KEY = "metrics.speed";
+
+export type HubHost = Pick<HostPort, "env" | "fs" | "http" | "process" | "store"> & {
+  readonly ui: HostPort["ui"] & { toast(text: string): void };
+  readonly session: {
+    model(): Promise<string>;
+    usage(): Promise<{ readonly context: { readonly tokens?: number } }>;
+  };
+  readonly command: { run(input: CommandRunArgs): Promise<unknown> };
+};
+
+export type HubController = {
+  // Opens the hub on `scope`, reading the catalog, the credentials and the recent use first.
+  open(host: HubHost, scope?: string): Promise<void>;
+  draw(elements: HubElements): RenderElement;
+  // Called on `ui.focus`: a row button taking the ring shows its detail line.
+  focused(element: string | undefined): void;
+  // Called on `ui.close`: true when a person's Esc only clears a non-empty search, so the close is refused.
+  refusesClose(origin: { readonly kind: string }): boolean;
+};
+
+export function createHubController(services: Services): HubController {
+  let host: HubHost | undefined;
+  let state: HubState | undefined;
+  let sources: readonly HubSource[] = [];
+  let recent: RecentMap = {};
+  // Providers whose list the hub has refreshed this session, so each refreshes once.
+  const refreshed = new Set<string>();
+
+  const redraw = (): void => host?.ui.invalidate("ui.render");
+
+  function patch(changes: Partial<HubState>): void {
+    if (state === undefined) return;
+    state = { ...state, ...changes };
+    redraw();
+  }
+
+  async function contextOf(current: HubHost): Promise<number> {
+    try {
+      return (await current.session.usage()).context.tokens ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  // The lists the hub draws: a provider without a stored login is locked.
+  async function rebuild(current: HubHost): Promise<void> {
+    const providers = services.catalog.enabledProviders();
+    const locked = new Set<string>();
+    for (const plugin of providers) {
+      if (plugin.login.kind === "none") continue;
+      if ((await services.credentials.list(plugin.identity.id)).length === 0) locked.add(plugin.identity.id);
+    }
+    const speeds = (await current.store.get(SPEED_KEY)) as SpeedMap | undefined;
+    recent = recentOf(await current.store.get(RECENT_KEY));
+    sources = hubSources({
+      providers: providers.map((plugin) => ({
+        id: plugin.identity.id,
+        name: plugin.identity.name,
+        locked: locked.has(plugin.identity.id),
+      })),
+      models: services.catalog.models(),
+      speeds: speeds ?? {},
+      refresh: (providerId) => services.catalog.refresh(providerId),
+    });
+  }
+
+  // The first time a provider's entry is the scope in a session, its list refreshes.
+  // A failed refresh keeps the cached rows, and the catalog records its status.
+  async function refreshScope(scope: string): Promise<void> {
+    const current = host;
+    if (scope === ALL_SCOPE || current === undefined || refreshed.has(scope)) return;
+    refreshed.add(scope);
+    patch({ refreshing: new Set([...(state?.refreshing ?? []), scope]) });
+    try {
+      await sources.find((source) => source.id === scope)?.refresh?.();
+      await rebuild(current);
+    } catch {
+      // The cached rows stay; the catalog's status says what failed.
+    } finally {
+      if (state !== undefined) patch({ refreshing: new Set([...state.refreshing].filter((id) => id !== scope)) });
+    }
+  }
+
+  async function open(current: HubHost, scope: string): Promise<void> {
+    host = current;
+    try {
+      await services.catalog.load();
+      await rebuild(current);
+      const base: HubState = {
+        scope: ALL_SCOPE,
+        query: "",
+        view: "list",
+        refreshing: new Set(),
+        currentModel: await current.session.model(),
+        contextTokens: await contextOf(current),
+      };
+      const next = withScope(base, scope, sources);
+      const opened = await current.ui.open({
+        id: HUB_PANE_ID,
+        title: HUB_TITLE,
+        focus: true,
+        closeOnEscape: true,
+        holdToasts: true,
+      });
+      if (!opened.isPlaced) {
+        current.ui.log(`The model hub could not be shown: ${opened.reason}`);
+        return;
+      }
+      state = next;
+      void refreshScope(next.scope);
+    } catch {
+      state = undefined;
+      current.ui.log("/model could not open the model hub. Nothing was changed.");
+    }
+  }
+
+  // Runs a pane action's work, reporting a failure in the transcript instead of throwing.
+  function settle(work: () => Promise<void>): void {
+    work().catch(() => host?.ui.log("The model hub stopped on an unexpected error."));
+  }
+
+  async function pick(row: HubRow): Promise<void> {
+    const current = host;
+    const shown = state;
+    if (current === undefined || shown === undefined) return;
+    // The mod never starts a compaction (#4): `$.session.compact()` skips the mod's own
+    // hook and sends a routed transcript to Anthropic. So a pick the transcript does not
+    // fit is refused and the pane stays open.
+    if (isOverContext(row, shown.contextTokens)) {
+      current.ui.toast(`Kept ${shown.currentModel}: this conversation is larger than ${row.switchArg}'s window.`);
+      return;
+    }
+    await current.ui.close({ id: HUB_PANE_ID });
+    await current.command.run({ command: "model", args: row.switchArg });
+  }
+
+  // A locked provider's login: the hub closes, the flow runs, and a saved login reopens the hub on it.
+  async function login(providerId: string): Promise<void> {
+    const current = host;
+    if (current === undefined) return;
+    await current.ui.close({ id: HUB_PANE_ID });
+    const outcome = await loginToProvider(current, providerId, services);
+    current.ui.log(outcome.text);
+    if (!outcome.ok) return;
+    refreshed.add(providerId);
+    await open(current, providerId);
+  }
+
+  const actions: HubActions = {
+    selectScope(id) {
+      if (state === undefined) return;
+      state = withScope(state, id, sources);
+      redraw();
+      void refreshScope(state.scope);
+    },
+    setQuery(text) {
+      if (state === undefined) return;
+      state = withQuery(state, text, sources, recent);
+      redraw();
+    },
+    pick: (row) => settle(() => pick(row)),
+    submit() {
+      if (state === undefined) return;
+      const highlighted = state.highlighted;
+      const rows = hubView(state, sources, recent).rows;
+      const target = rows.find((row) => row.key === highlighted) ?? rows[0];
+      if (target !== undefined) settle(() => pick(target.row));
+    },
+    login: (providerId) => settle(() => login(providerId)),
+  };
+
+  return {
+    open: (current, scope = ALL_SCOPE) => open(current, scope),
+    draw(elements) {
+      if (state === undefined) return elements.Box({ children: [] });
+      return drawHub(elements, hubView(state, sources, recent), actions);
+    },
+    focused(element) {
+      if (state === undefined || element === undefined || !element.startsWith("row:")) return;
+      if (state.highlighted !== element) patch({ highlighted: element });
+    },
+    refusesClose(origin) {
+      if (state === undefined || origin.kind !== "person" || state.query === "") return false;
+      state = withQuery(state, "", sources, recent);
+      redraw();
+      return true;
+    },
+  };
+}
