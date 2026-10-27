@@ -189,10 +189,11 @@ export const register: Register = (on, options) => {
   // One services set per engine, shared by the login hooks and the model hub, so a
   // catalog refresh from either one also syncs the model picker rows in settings.json.
   let shared: Services | undefined;
+  let syncModelPickerRows: (() => Promise<void>) | undefined;
   const servicesFor = (host: HostPort): Services => {
     if (shared !== undefined) return shared;
     const services = createServices(host, { pane });
-    watchModelPickerRows(services.catalog, host, services.platform);
+    syncModelPickerRows = watchModelPickerRows(services.catalog, host, services.platform);
     shared = services;
     return services;
   };
@@ -310,6 +311,14 @@ export const register: Register = (on, options) => {
 
   on("ui.close", { id: PANE_ID }, (_, e, next) => {
     pane.closedByHost();
+    return next(e);
+  });
+
+  // The model picker rows are written from the cached catalog as the session starts,
+  // so Claude Code's own /model knows each routed id before the first pick.
+  on("session.start", async ($, e, next) => {
+    servicesFor(hostPort($));
+    await syncModelPickerRows?.();
     return next(e);
   });
 

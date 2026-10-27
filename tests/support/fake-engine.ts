@@ -12,6 +12,7 @@ import type {
   ToolInfo,
 } from "claude-code";
 import type { ApiMessageInput } from "../../src/translate/messages.ts";
+import { settingsPath } from "../../src/hub/settings-rows.ts";
 
 export type FakePlatform = "macos" | "windows" | "linux" | "other";
 
@@ -440,6 +441,20 @@ export function writtenText(engine: FakeEngine, path: string): string | undefine
 type Hook = (engine: unknown, input: unknown, next: (input: unknown) => unknown) => unknown;
 type RecordedHook = { readonly event: string; readonly matcher: Readonly<Record<string, unknown>> | undefined; readonly run: Hook };
 
+// Core's own `/model <id>`, as the host checks it: a built-in alias or a Claude id is
+// taken, and any other id only while a `modelPicker.options` row in the user's settings
+// names it. Every other event ends in `{}`.
+const BUILT_IN_MODELS = new Set(["default", "opus", "sonnet", "haiku", "fable"]);
+
+async function coreModelCommand(engine: FakeEngine, id: string): Promise<unknown> {
+  if (id === "" || BUILT_IN_MODELS.has(id) || id.includes("claude")) return {};
+  const path = await settingsPath(engine, "linux");
+  const text = path !== undefined && (await engine.fs.exists(path)) ? await engine.fs.read(path) : "{}";
+  const options = (JSON.parse(text) as { modelPicker?: { options?: { model?: string }[] } }).modelPicker?.options ?? [];
+  if (options.some((row) => row.model === id)) return {};
+  return { text: `Model '${id}' not found` };
+}
+
 // Records what a module registers, and dispatches events as the host chains them: a
 // hook runs when its matcher's fields equal the input's, and its `next` passes on to
 // the next matching hook. `$.command.run` on the engine dispatches `command.run` too, so
@@ -458,11 +473,15 @@ export function recordHooks(engine: FakeEngine): {
     });
     return { catch: () => undefined };
   };
+  const core = (input: unknown): unknown => {
+    const run = input as { command?: string; args?: string };
+    return run.command === "model" ? coreModelCommand(engine, (run.args ?? "").trim()) : {};
+  };
   const matches = (hook: RecordedHook, input: unknown): boolean =>
     hook.matcher === undefined ||
     Object.entries(hook.matcher).every(([field, value]) => (input as Record<string, unknown>)[field] === value);
 
-  function dispatch(event: string, input: unknown, terminal: (input: unknown) => unknown = () => ({})): unknown {
+  function dispatch(event: string, input: unknown, terminal: (input: unknown) => unknown = core): unknown {
     const from = (start: number) => (current: unknown): unknown => {
       const index = hooks.findIndex((hook, at) => at >= start && hook.event === event && matches(hook, current));
       const hook = hooks[index];

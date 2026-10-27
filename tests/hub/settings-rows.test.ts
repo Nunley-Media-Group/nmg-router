@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { writeCache } from "../../src/catalog/cache.ts";
 import { createCatalog } from "../../src/catalog/catalog.ts";
 import { createSettingsRows, settingsPath, watchModelPickerRows } from "../../src/hub/settings-rows.ts";
 import type { CredentialStore } from "../../src/credentials/store.ts";
@@ -134,5 +135,32 @@ describe("catalog listener", () => {
 
     await stub.forget("stub");
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  // Claude Code's /model takes a routed id only once its row is in the loaded settings,
+  // so the rows cannot wait for a refresh.
+  it("writes the rows from the cached catalog when started, with no refresh and no network call", async () => {
+    const engine = fakeEngine({ platform: "linux" });
+    await writeCache(engine, {
+      version: 1,
+      providers: {
+        stub: {
+          fetchedAt: 1,
+          status: "ok",
+          models: [{ id: "stub/m1", provider: "stub", model: "m1", name: "M1", wire: "openai-completions", baseUrl: "https://example.test" }],
+        },
+      },
+    });
+    const stub = createCatalog({ ...engine, credentials: { list: async () => [] } as unknown as CredentialStore }, [plugin]);
+    const listener = vi.fn();
+    stub.onChange(listener);
+
+    await watchModelPickerRows(stub, engine, async () => "linux")();
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(engine.recorded.http).toEqual([]);
+    expect(JSON.parse(writtenText(engine, PATH) ?? "").modelPicker.options).toEqual([
+      { model: "stub/m1", label: "Stub · M1" },
+    ]);
   });
 });

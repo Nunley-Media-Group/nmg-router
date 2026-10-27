@@ -4,7 +4,7 @@ import { loginToProvider } from "../login/login-command.ts";
 import type { SpeedMap } from "../routing/metrics.ts";
 import type { Services } from "../services.ts";
 import { ALL_SCOPE, hubView, isOverContext, withQuery, withScope, type HubState } from "./hub-state.ts";
-import { drawHub, type HubActions, type HubElements } from "./hub-view.ts";
+import { drawHub, focusableKeys, type HubActions, type HubElements } from "./hub-view.ts";
 import { recentOf, RECENT_KEY, type RecentMap } from "./recent.ts";
 import { hubSources, type HubRow, type HubSource } from "./sources.ts";
 
@@ -42,8 +42,22 @@ export function createHubController(services: Services): HubController {
   let recent: RecentMap = {};
   // Providers whose list the hub has refreshed this session, so each refreshes once.
   const refreshed = new Set<string>();
+  // The key of the element the focus ring rests on, from `ui.focus`.
+  let ring: string | undefined;
 
   const redraw = (): void => host?.ui.invalidate("ui.render");
+
+  // The host's ring holds a position, so a redraw that changes the rows or the view
+  // would move it onto another element, or off the pane. This puts it back by key: on
+  // the login button in the locked view, else where it was, else on the search field.
+  function keepRing(): void {
+    const current = host;
+    if (current === undefined || state === undefined) return;
+    const view = hubView(state, sources, recent);
+    const keys = focusableKeys(view);
+    const key = view.mode === "locked" ? "login" : ring !== undefined && keys.includes(ring) ? ring : "search";
+    current.ui.focus({ requestId: HUB_PANE_ID, key }).catch(() => undefined);
+  }
 
   function patch(changes: Partial<HubState>): void {
     if (state === undefined) return;
@@ -95,6 +109,7 @@ export function createHubController(services: Services): HubController {
       // The cached rows stay; the catalog's status says what failed.
     } finally {
       if (state !== undefined) patch({ refreshing: new Set([...state.refreshing].filter((id) => id !== scope)) });
+      keepRing();
     }
   }
 
@@ -124,6 +139,7 @@ export function createHubController(services: Services): HubController {
         return;
       }
       state = next;
+      ring = undefined;
       void refreshScope(next.scope);
     } catch {
       state = undefined;
@@ -168,6 +184,7 @@ export function createHubController(services: Services): HubController {
       if (state === undefined) return;
       state = withScope(state, id, sources);
       redraw();
+      keepRing();
       void refreshScope(state.scope);
     },
     setQuery(text) {
@@ -193,6 +210,7 @@ export function createHubController(services: Services): HubController {
       return drawHub(elements, hubView(state, sources, recent), actions);
     },
     focused(element) {
+      ring = element;
       if (state === undefined || element === undefined || !element.startsWith("row:")) return;
       if (state.highlighted !== element) patch({ highlighted: element });
     },

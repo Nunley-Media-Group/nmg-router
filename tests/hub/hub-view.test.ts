@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { drawHub, type HubActions } from "../../src/hub/hub-view.ts";
+import { drawHub, focusableKeys, type HubActions } from "../../src/hub/hub-view.ts";
 import { ALL_SCOPE, hubView, withQuery, withScope, type HubState } from "../../src/hub/hub-state.ts";
 import { hubSources, type HubRow } from "../../src/hub/sources.ts";
 import { drawnElements } from "../support/fake-engine.ts";
@@ -67,6 +67,51 @@ describe("hub view", () => {
     expect(rowText).toContain("$0.6/2.4");
     expect(rowText).toContain("118t/s");
     expect(textOf(keyed(tree, "row:opencode-go/glm-5.1"))).toContain("free");
+  });
+
+  // A Button runs its Text children together on the terminal, so the id and the
+  // columns are one padded line, aligned across the rows shown.
+  it("draws each row as one line with the columns apart from the id and aligned", () => {
+    const { actions } = recordingActions();
+    const tree = draw(state({ scope: "opencode-go" }), actions);
+    const labels = ["row:opencode-go/kimi-k3.1-pro", "row:opencode-go/glm-5.1"].map((key) => {
+      const texts = nodesOf(keyed(tree, key), "Text");
+      expect(texts).toHaveLength(1);
+      return textOf(texts[0]);
+    });
+    expect(labels[0]).toBe("kimi-k3.1-pro  128k  $0.6/2.4  118t/s");
+    expect(labels[1]).toBe("glm-5.1        203k  free");
+  });
+
+  // The host's focus ring keeps a position in document order, so nothing focusable may
+  // come before the search field, or a search that dims sidebar entries moves the ring.
+  it("draws the search field first in document order, before the sidebar, while the sidebar stays on the left", () => {
+    const { actions } = recordingActions();
+    for (const query of ["", "kimi"]) {
+      const tree = draw(withQuery(state(), query, sources, {}), actions);
+      const inOrder: string[] = [];
+      const visit = (value: unknown): void => {
+        if (Array.isArray(value)) return value.forEach(visit);
+        if (typeof value !== "object" || value === null) return;
+        const node = value as { type?: string; props: { key?: string; children?: unknown } };
+        if (node.type === "Input" || node.type === "Button") inOrder.push(node.props.key ?? "");
+        visit(node.props.children);
+      };
+      visit(tree);
+      expect(inOrder[0]).toBe("search");
+      expect(inOrder.indexOf("scope:all")).toBeGreaterThan(0);
+      expect((tree as { props: { flexDirection?: string } }).props.flexDirection).toBe("row-reverse");
+      expect(focusableKeys(hubView(withQuery(state(), query, sources, {}), sources, {}))[0]).toBe("search");
+    }
+  });
+
+  it("draws the detail line and the footer above the rows, so a long list cannot hide them", () => {
+    const { actions } = recordingActions();
+    const text = textOf(draw(state({ scope: "opencode-go" }), actions));
+    const firstRow = text.indexOf("kimi-k3.1-pro  ");
+    expect(text.indexOf("Enter switch")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("Enter switch")).toBeLessThan(firstRow);
+    expect(text.indexOf("Kimi K3.1 Pro ·")).toBeLessThan(firstRow);
   });
 
   it("draws the search field, the detail line of the first row and the footer", () => {

@@ -4,6 +4,10 @@ import type { HubView, SidebarEntry, VisibleRow } from "./hub-state.ts";
 
 // Draws the hub's view model with Box, Text, Input and Button only. Each action is a
 // closure the controller supplies, so the drawing holds no state of its own.
+//
+// The host's focus ring holds a position in document order, not a key. So the main
+// column, with the search field first, is drawn before the sidebar: a search that
+// turns sidebar buttons into text moves nothing ahead of the field.
 
 export type HubElements = Pick<Elements["terminal"], "Box" | "Text" | "Button" | "Input">;
 
@@ -35,16 +39,16 @@ function drawSidebar(elements: HubElements, entries: readonly SidebarEntry[], ac
   });
 }
 
-function drawRow(elements: HubElements, row: VisibleRow, actions: HubActions): RenderElement {
+// A Button draws its Text children run together, so each row is one line: the id
+// padded to the widest one shown, then the columns.
+function drawRow(elements: HubElements, row: VisibleRow, width: number, actions: HubActions): RenderElement {
   const { Button, Text } = elements;
+  const label = row.right === "" ? row.left : `${row.left.padEnd(width)}  ${row.right}`;
   return Button({
     key: row.key,
     dimColor: row.overContext,
     onPress: () => actions.pick(row.row),
-    children: [
-      Text({ tabular: true, dimColor: row.overContext, children: row.left }),
-      Text({ tabular: true, dimColor: true, children: row.right }),
-    ],
+    children: [Text({ tabular: true, dimColor: row.overContext, children: label })],
   });
 }
 
@@ -60,13 +64,15 @@ function listChildren(elements: HubElements, view: HubView, actions: HubActions)
       onSubmit: () => actions.submit(),
     }),
   ];
+  // The detail line and the footer sit above the rows, so a list taller than the pane never hides them.
+  if (view.detail !== undefined) children.push(Text({ children: view.detail }));
+  children.push(Text({ dimColor: true, children: FOOTER }));
   if (view.rows.length === 0) {
     const empty = view.query.trim() === "" ? "No models in this list yet." : "No matching models.";
     children.push(Text({ dimColor: true, children: empty }));
   }
-  for (const row of view.rows) children.push(drawRow(elements, row, actions));
-  if (view.detail !== undefined) children.push(Text({ children: view.detail }));
-  children.push(Text({ dimColor: true, children: FOOTER }));
+  const width = Math.max(0, ...view.rows.map((row) => row.left.length));
+  for (const row of view.rows) children.push(drawRow(elements, row, width, actions));
   return children;
 }
 
@@ -97,7 +103,14 @@ export function drawHub(elements: HubElements, view: HubView, actions: HubAction
     children: view.mode === "locked" ? lockedChildren(elements, view, actions) : listChildren(elements, view, actions),
   });
   return Box({
-    flexDirection: "row",
-    children: [drawSidebar(elements, view.sidebar, actions), main],
+    flexDirection: "row-reverse",
+    children: [main, drawSidebar(elements, view.sidebar, actions)],
   });
+}
+
+// The keys of the elements the ring can rest on, in the order drawHub draws them.
+export function focusableKeys(view: HubView): string[] {
+  const main = view.mode === "locked" ? ["login"] : ["search", ...view.rows.map((row) => row.key)];
+  const sidebar = view.sidebar.filter((entry) => entry.focusable).map((entry) => `scope:${entry.id}`);
+  return [...main, ...sidebar];
 }

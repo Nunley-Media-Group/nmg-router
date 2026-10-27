@@ -35,6 +35,7 @@ describe("hooks wiring", () => {
       { event: "classic.PostToolUse", matcher: undefined },
       { event: "ui.render", matcher: { component: "Pane", requestId: PANE_ID } },
       { event: "ui.close", matcher: { id: PANE_ID } },
+      { event: "session.start", matcher: undefined },
       { event: "command.run", matcher: { command: "model" } },
       { event: "ui.render", matcher: { component: "Pane", requestId: HUB_PANE_ID } },
       { event: "ui.focus", matcher: { requestId: HUB_PANE_ID } },

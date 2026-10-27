@@ -71,6 +71,33 @@ describe("/model with no arguments", () => {
     expect(h.services.refresh).toHaveBeenCalledTimes(1);
   });
 
+  // The host's ring keeps a position, and a scope change redraws a different number of
+  // rows ahead of the sidebar, so the hub puts the ring back on its element by key.
+  it("keeps the focus ring on the pressed sidebar entry, and on the login button in the locked view", async () => {
+    const h = await hubHarness();
+    await openBare(h);
+    await settle();
+    h.hub.focused("scope:opencode-go");
+    keyed(tree(h), "scope:opencode-go")?.props.onPress?.();
+    await settle();
+    expect(h.engine.recorded.focus.at(-1)).toBe("scope:opencode-go");
+
+    h.hub.focused("scope:xai");
+    keyed(tree(h), "scope:xai")?.props.onPress?.();
+    await settle();
+    expect(h.engine.recorded.focus.at(-1)).toBe("login");
+  });
+
+  it("puts the ring on the search field when the element it rested on is no longer drawn", async () => {
+    const h = await hubHarness();
+    await openBare(h);
+    await settle();
+    h.hub.focused("row:opus");
+    keyed(tree(h), "scope:opencode-go")?.props.onPress?.();
+    await settle();
+    expect(h.engine.recorded.focus.at(-1)).toBe("search");
+  });
+
   it("clears a non-empty search on Esc, and closes the hub once the search is empty", async () => {
     const h = await hubHarness();
     await openBare(h);

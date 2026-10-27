@@ -106,10 +106,18 @@ export function createSettingsRows(host: SettingsHost, options: SettingsRowsOpti
   };
 }
 
-// Syncs the rows each time the catalog refreshes or logs out.
-export function watchModelPickerRows(catalog: Catalog, host: SettingsHost, platform: () => Promise<string>): void {
+// Syncs the rows each time the catalog refreshes or logs out. Claude Code's own /model
+// accepts a routed id only once its row is in the settings it has loaded, so the
+// returned function syncs from the cached catalog too, with no network call; the
+// session start runs it, before the person can pick a model.
+export function watchModelPickerRows(
+  catalog: Catalog,
+  host: SettingsHost,
+  platform: () => Promise<string>,
+): () => Promise<void> {
   const rows = createSettingsRows(host, { platform, catalog });
-  catalog.onChange(() => {
+  const sync = (): Promise<void> =>
     rows.sync().catch(() => host.ui.log("nmg-router could not update the model picker in settings.json."));
-  });
+  catalog.onChange(() => void sync());
+  return () => catalog.load().then(sync, () => host.ui.log("nmg-router could not read the model catalog."));
 }
