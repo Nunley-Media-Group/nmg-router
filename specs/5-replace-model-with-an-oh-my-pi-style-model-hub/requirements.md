@@ -1,7 +1,7 @@
 # Requirements: Replace /model with an oh-my-pi-style model hub
 
 **Issue**: #5
-**Date**: 2026-10-25
+**Date**: 2026-10-26
 **Status**: Approved
 **Author**: Rich Nunley
 **Related Spec**: specs/2-add-the-provider-catalog-with-provider-aware-login-and-logout/
@@ -76,8 +76,8 @@ The catalog, login, routed turns (with speed metrics) and routed compaction exis
 **When** the user selects that model
 **Then**:
 - its row showed a "context too large" mark;
-- the session is compacted first and then switched;
-- a compaction that is skipped or fails leaves the current model in place with a notice.
+- the pick is refused: the current model stays, the notice `Kept <current>: this conversation is larger than <id>'s window.` is shown, and the pane stays open;
+- the mod never calls `$.session.compact()`, per #4.
 
 ### AC8: Settings rows
 
@@ -101,9 +101,11 @@ The catalog, login, routed turns (with speed metrics) and routed compaction exis
 - Model roles and role cycling
 - A separate compact `/switch` picker
 - An F5 or other hotkey refresh
+- Compacting the session before a switch: the mod never calls `$.session.compact()` (#4)
 
 ## Change History
 
 | Issue | Date | Summary |
 |-------|------|---------|
 | #5 | 2026-10-25 | Initial feature spec |
+| #5 | 2026-10-26 | Amended AC7: an over-window pick is refused, not compacted first, per #4 |
