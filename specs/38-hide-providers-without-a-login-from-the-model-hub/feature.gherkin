@@ -1,0 +1,49 @@
+**Issue**: #38
+**Date**: 2026-10-27
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/5-replace-model-with-an-oh-my-pi-style-model-hub/
+
+# File: tests/features/hub-provider-visibility.feature
+# Generated from: specs/38-hide-providers-without-a-login-from-the-model-hub/requirements.md
+Feature: Hide providers without a login from the /model hub
+
+  @SCN001
+  Scenario: A provider without a login has no hub entry
+    Given "xai" is enabled, needs an API key login, and has no stored login
+    When the person opens the "/model" hub
+    Then the sidebar has no "xAI" entry
+    And no "xai/" model appears in "All models" or in a search for "xai"
+
+  @SCN002
+  Scenario: Logged-in and login-free providers still appear
+    Given "opencode-go" has a stored login and another enabled provider needs no login
+    When the person opens the "/model" hub
+    Then the sidebar lists "All models", "Claude", "OpenCode Go" and the login-free provider
+    And both providers' models are listed
+
+  @SCN003
+  Scenario: Logging in makes the provider appear
+    Given "xai" was hidden because it had no stored login
+    When the person completes "/login" for "xai" and opens the "/model" hub again
+    Then the sidebar lists "xAI" and its models
+
+  @SCN004
+  Scenario: Logging out hides the provider
+    Given "opencode-go" is listed in the hub with one stored login
+    When the person runs "/logout" for "opencode-go" and opens the "/model" hub again
+    Then the sidebar has no "OpenCode Go" entry
+
+  @SCN005
+  Scenario: A stored but failing login keeps the provider listed
+    Given "opencode-go" has a stored login whose credential cannot currently be resolved
+    And the catalog keeps its cached models
+    When the person opens the "/model" hub
+    Then the sidebar lists "OpenCode Go" with its cached models
+
+  @SCN006
+  Scenario: Nothing replaces the hidden entries
+    Given no login-requiring provider has a stored login
+    When the person opens the "/model" hub
+    Then the sidebar lists only "All models" and "Claude"
+    And the hub shows the Claude models with no "has no credentials" text, no login button and no hint about hidden providers
