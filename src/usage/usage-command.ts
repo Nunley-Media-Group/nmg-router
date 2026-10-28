@@ -11,6 +11,8 @@ import type { UsageFailureKind, UsageOutcome } from "./report.ts";
 // The `/usage` hook's body. Claude Code's own view runs first, unchanged. Then each
 // enabled provider the person is logged in to gets an entry, read through the shared
 // monitor with the active account's credential. One provider's failure is its own entry.
+// Claude Code's `/usage` is a panel: the host drops a hook's answer after `next(e)`, so
+// the entries go to the transcript as rows of their own, and the built-in result passes through.
 
 export type UsageCommandDeps = {
   readonly catalog: Pick<Catalog, "load" | "enabledProviders" | "activeAccount">;
@@ -19,6 +21,8 @@ export type UsageCommandDeps = {
   readonly platform: () => Promise<string>;
   readonly monitor: UsageMonitor;
   readonly now: () => number;
+  // Appends one row to the transcript.
+  readonly log: (text: string) => void;
 };
 
 type CommandNext = (input: CommandRunInput) => Promise<CommandRunResult>;
@@ -52,29 +56,36 @@ async function readingOf(deps: UsageCommandDeps, plugin: ProviderPlugin): Promis
   try {
     const account = await deps.catalog.activeAccount(provider);
     if (account === undefined) return { kind: "unauthenticated" };
-    const auth = await credentialOf(deps, plugin, account);
-    if (typeof auth === "string") return { kind: auth };
-    const context = { platform: await deps.platform(), auth };
-    return await deps.monitor.read(provider, account, () => source.read({ http: deps.http }, context));
+    // The credential is resolved only when the throttle lets the read through.
+    return await deps.monitor.read(provider, account, async () => {
+      const auth = await credentialOf(deps, plugin, account);
+      if (typeof auth === "string") return { kind: auth };
+      return source.read({ http: deps.http }, { platform: await deps.platform(), auth });
+    });
   } catch {
     return { kind: "unavailable" };
   }
 }
 
-// Claude Code's `/usage` text first, then the entries. With no provider logged in, the result is Claude Code's own, unchanged.
-export async function handleUsage(deps: UsageCommandDeps, input: CommandRunInput, next: CommandNext): Promise<CommandRunResult> {
-  const result = await next(input);
+// The entries, one transcript row per line, since a row draws one line. With no provider logged in, nothing is added. A failed listing adds nothing.
+async function logUsage(deps: UsageCommandDeps): Promise<void> {
   try {
     const rows = await loggedInProviders(deps);
-    if (rows.length === 0) return result;
+    if (rows.length === 0) return;
     const entries: UsageEntry[] = await Promise.all(
       rows.map(async (plugin) => ({ name: plugin.identity.name, reading: await readingOf(deps, plugin) })),
     );
-    const usage = renderUsageEntries(entries, deps.now());
-    const builtIn = result.text === undefined || result.text === "" ? [] : [result.text];
-    return { ...result, text: [...builtIn, usage].join("\n\n") };
+    for (const line of renderUsageEntries(entries, deps.now()).split("\n")) deps.log(line);
   } catch {
-    // A failed listing adds nothing; Claude Code's own view still stands.
-    return result;
+    // Claude Code's own view still stands.
+  }
+}
+
+// Claude Code's `/usage` first, then the entries. Its result, or its rejection when the panel was interrupted, passes through unchanged.
+export async function handleUsage(deps: UsageCommandDeps, input: CommandRunInput, next: CommandNext): Promise<CommandRunResult> {
+  try {
+    return await next(input);
+  } finally {
+    await logUsage(deps);
   }
 }

@@ -243,6 +243,7 @@ export const register: Register = (on, options) => {
       platform: services.platform,
       monitor: usage,
       now: Date.now,
+      log: (text) => host.ui.log(text),
     };
   };
 
@@ -349,7 +350,7 @@ export const register: Register = (on, options) => {
     return handleModelCommand(host, e, next, hubFor(host), rowLoaded);
   });
 
-  // `/usage` shows Claude Code's own view, then one entry per provider the person is logged in to. A failed hook still runs that view.
+  // `/usage` shows Claude Code's own view, then transcript rows with one entry per provider the person is logged in to. A failed hook still runs that view.
   on("command.run", { command: "usage" }, ($, e, next) => handleUsage(usageDeps(hostPort($)), e, next)).catch((_, e, next) =>
     next(e),
   );

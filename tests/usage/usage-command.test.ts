@@ -55,38 +55,55 @@ function depsOf(engine: FakeEngine, monitor = createUsageMonitor(() => NOW)): Us
     platform: services.platform,
     monitor,
     now: () => NOW,
+    log: (text) => engine.ui.log(text),
   };
 }
 
+// Claude Code's `/usage` as the host runs it: a panel that prints no text, so its result is only the run's `ref`.
+const PANEL = { ref: 7 };
+const panel = async () => PANEL;
+
 describe("/usage entries", () => {
-  it("runs the built-in view first, then lists each logged-in provider by name, leaving out one without a login", async () => {
+  it("runs the built-in view first, then logs each logged-in provider by name as a transcript row, leaving out one without a login", async () => {
     const engine = fakeEngine({ platform: "linux", http: usageAnswers({ codex: CODEX_OK, opencode: OPENCODE_OK }) });
     await signIn(engine, "opencode-go", "sentinel-opencode");
     await codexLogin(engine);
     await signIn(engine, "xai", "sentinel-xai");
-    const next = vi.fn(async () => ({ text: "built-in" }));
+    const next = vi.fn(async () => {
+      expect(engine.recorded.ui).toEqual([]);
+      return PANEL;
+    });
 
     const result = await handleUsage(depsOf(engine), INPUT, next);
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledWith(INPUT);
-    expect(result.text).toBe(
-      [
-        "built-in",
-        "",
-        "Provider plan usage",
-        "OpenAI Codex",
-        "  5h 23% · resets in 2h 10m",
-        "  7d 41% · resets in 5d 21h",
-        "OpenCode Go",
-        "  5h 12% · resets in 1h 43m",
-        "  weekly 41% · resets in 8d 21h",
-        "  monthly 7% · resets in 29d 21h",
-        "xAI",
-        "  No usage reading available",
-      ].join("\n"),
-    );
-    expect(result.text).not.toContain("ClinePass");
+    // The panel's run passes through as the host gave it, so the host shows it verbatim.
+    expect(result).toBe(PANEL);
+    // One row per line: a transcript row draws a single line.
+    expect(engine.recorded.ui).toEqual([
+      "Provider plan usage",
+      "OpenAI Codex",
+      "  5h 23% · resets in 2h 10m",
+      "  7d 41% · resets in 5d 21h",
+      "OpenCode Go",
+      "  5h 12% · resets in 1h 43m",
+      "  weekly 41% · resets in 8d 21h",
+      "  monthly 7% · resets in 29d 21h",
+      "xAI",
+      "  No usage reading available",
+    ]);
+    expect(engine.recorded.ui.join("\n")).not.toContain("ClinePass");
+  });
+
+  it("still logs the entries, and passes the rejection on, when the panel is interrupted", async () => {
+    const engine = fakeEngine({ platform: "linux", http: usageAnswers({ opencode: OPENCODE_OK }) });
+    await signIn(engine, "opencode-go", "sentinel-opencode");
+    const interrupted = new Error("interrupted");
+
+    await expect(handleUsage(depsOf(engine), INPUT, () => Promise.reject(interrupted))).rejects.toBe(interrupted);
+
+    expect(engine.recorded.ui.join("\n")).toContain("OpenCode Go\n  5h 12% · resets in 1h 43m");
   });
 
   it("shows one failing provider's failure and the other provider's windows", async () => {
@@ -94,13 +111,14 @@ describe("/usage entries", () => {
     await codexLogin(engine);
     await signIn(engine, "opencode-go", "sentinel-opencode");
 
-    const { text } = await handleUsage(depsOf(engine), INPUT, async () => ({ text: "built-in" }));
+    await handleUsage(depsOf(engine), INPUT, panel);
 
+    const text = engine.recorded.ui.join("\n");
     expect(text).toContain("OpenAI Codex\n  Usage could not be read: unavailable\n");
     expect(text).toContain("OpenCode Go\n  5h 12% · resets in 1h 43m");
   });
 
-  it("returns Claude Code's own result unchanged, and sends no usage request, with no provider logged in", async () => {
+  it("returns Claude Code's own result unchanged, and adds no row and sends no usage request, with no provider logged in", async () => {
     const engine = fakeEngine({ platform: "linux", http: usageAnswers({ codex: CODEX_OK, opencode: OPENCODE_OK }) });
     const built = { text: "built-in", context: ["a note"] };
     const next = vi.fn(async () => built);
@@ -108,6 +126,7 @@ describe("/usage entries", () => {
     const result = await handleUsage(depsOf(engine), INPUT, next);
 
     expect(result).toBe(built);
+    expect(engine.recorded.ui).toEqual([]);
     expect(engine.recorded.http).toEqual([]);
   });
 
@@ -115,13 +134,25 @@ describe("/usage entries", () => {
     const engine = fakeEngine({ platform: "linux", http: usageAnswers({ opencode: OPENCODE_OK }) });
     await signIn(engine, "opencode-go", "sentinel-opencode");
     const deps = depsOf(engine);
-    const next = async () => ({ text: "built-in" });
 
-    await handleUsage(deps, INPUT, next);
-    const second = await handleUsage(deps, INPUT, next);
+    await handleUsage(deps, INPUT, panel);
+    await handleUsage(deps, INPUT, panel);
 
-    expect(second.text).toContain("OpenCode Go\n  5h 12% · resets in 1h 43m");
+    expect(engine.recorded.ui.filter((line) => line === "OpenCode Go")).toHaveLength(2);
+    expect(engine.recorded.ui.join("\n")).toContain("OpenCode Go\n  5h 12% · resets in 1h 43m\n  weekly 41%");
     expect(engine.recorded.http.filter((request) => request.url === OPENCODE_USAGE_URL)).toHaveLength(1);
+  });
+
+  it("resolves no credential while the read is throttled", async () => {
+    const engine = fakeEngine({ platform: "linux", http: usageAnswers({ opencode: OPENCODE_OK }) });
+    await signIn(engine, "opencode-go", "sentinel-opencode");
+    const deps = depsOf(engine);
+    await handleUsage(deps, INPUT, panel);
+    const credentialReads = vi.spyOn(deps.credentials, "read");
+
+    await handleUsage(deps, INPUT, panel);
+
+    expect(credentialReads).not.toHaveBeenCalled();
   });
 
   it("keeps the credential out of the output, the log and the store, even when the read is refused", async () => {
@@ -129,10 +160,11 @@ describe("/usage entries", () => {
     const engine = fakeEngine({ platform: "linux", http: usageAnswers({ opencode: { status: 401 } }) });
     await signIn(engine, "opencode-go", sentinel);
 
-    const { text } = await handleUsage(depsOf(engine), INPUT, async () => ({ text: "built-in" }));
+    const result = await handleUsage(depsOf(engine), INPUT, panel);
 
+    const text = engine.recorded.ui.join("\n");
     expect(text).toContain("OpenCode Go\n  Usage could not be read: unauthenticated");
-    assertNoSentinel(engine, sentinel, [text]);
-    expect(engine.recorded.ui.join("\n")).not.toContain(sentinel);
+    assertNoSentinel(engine, sentinel, [text, JSON.stringify(result)]);
+    expect(engine.recorded.debug.join("\n")).not.toContain(sentinel);
   });
 });
