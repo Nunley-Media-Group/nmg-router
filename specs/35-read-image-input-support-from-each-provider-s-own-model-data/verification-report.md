@@ -4,7 +4,7 @@
 **Issue**: #35
 **Reviewer**: Claude Code (standalone `/sdlc-verify-code`)
 **Scope**: Implementation verification against spec
-**Verification head**: 8de9b9e64037d59453b7380a18b051d621b76d89
+**Verification head**: b72ae1f7c8d6681e116eb1d2a765d77f3a2815ae
 
 ---
 
@@ -148,6 +148,8 @@ Provider modules → `src/models/capability-sources.ts` → `src/providers/http.
 - Full suite: `npm test` passed (579 tests, 68 files)
 
 ### Registered validations (`.nmg-sdlc/verification/35.json`, coverage 3/3 complete)
+
+Re-run at the verification head `b72ae1f` after version preparation (`VERSION`, `package.json`, `.claude-plugin/plugin.json` → 0.11.0, plus the `CHANGELOG.md` entry), with a clean tree.
 
 | Validation | Command | Result |
 |------------|---------|--------|
