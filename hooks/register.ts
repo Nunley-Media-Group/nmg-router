@@ -351,6 +351,8 @@ export const register: Register = (on, options) => {
   });
 
   // `/usage` shows Claude Code's own view, then transcript rows with one entry per provider the person is logged in to. A failed hook still runs that view.
+  // In the catch `next` is replay-safe: after the hook called it (an interrupted panel rejects), `next(e)` passes that
+  // settlement on without running `/usage` again; only a hook that failed before calling it runs the built-in view here.
   on("command.run", { command: "usage" }, ($, e, next) => handleUsage(usageDeps(hostPort($)), e, next)).catch((_, e, next) =>
     next(e),
   );

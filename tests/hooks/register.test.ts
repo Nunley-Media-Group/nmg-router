@@ -44,9 +44,9 @@ describe("hooks wiring", () => {
     ]);
   });
 
-  // A failed `/usage` hook still runs Claude Code's own view, through its catch.
-  it("runs the built-in /usage through the usage hook's catch when the hook fails", () => {
-    type Handler = (engine: unknown, e: unknown, next: (e: unknown) => unknown) => unknown;
+  // The usage hook's catch handler, as `register` declares it.
+  function usageCatchOf(): (engine: unknown, e: unknown, next: unknown) => unknown {
+    type Handler = (engine: unknown, e: unknown, next: unknown) => unknown;
     let usageCatch: Handler | undefined;
     const on = ((event: string, matcher: unknown) => ({
       catch: (handler: Handler) => {
@@ -55,11 +55,27 @@ describe("hooks wiring", () => {
       },
     })) as unknown as Parameters<typeof register>[0];
     register(on, {} as never);
+    if (usageCatch === undefined) throw new Error("no /usage catch");
+    return usageCatch;
+  }
 
-    const input = { command: "usage", args: "", origin: { kind: "composer" }, presentation: { isFullscreen: false, columns: 200 } };
-    const next = vi.fn(() => ({ text: "built-in" }));
+  const usageInput = { command: "usage", args: "", origin: { kind: "composer" }, presentation: { isFullscreen: false, columns: 200 } };
 
-    expect(usageCatch?.({}, input, next)).toEqual({ text: "built-in" });
-    expect(next).toHaveBeenCalledWith(input);
+  // A failed `/usage` hook still runs Claude Code's own view, through its catch.
+  it("runs the built-in /usage through the usage hook's catch when the hook failed before calling next", () => {
+    const next = Object.assign(vi.fn(() => ({ text: "built-in" })), { called: false, error: { kind: "throw", budget: 1000 } });
+
+    expect(usageCatchOf()({}, usageInput, next)).toEqual({ text: "built-in" });
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(next).toHaveBeenCalledWith(usageInput);
+  });
+
+  // After an interrupted panel, the catch's `next` is the host's replay of that rejection, not a second run.
+  it("passes an interrupted /usage's rejection on through the replayed next, calling it once", async () => {
+    const interrupted = new Error("interrupted");
+    const replay = Object.assign(vi.fn(() => Promise.reject(interrupted)), { called: true, error: { kind: "throw", budget: 1000 } });
+
+    await expect(usageCatchOf()({}, usageInput, replay)).rejects.toBe(interrupted);
+    expect(replay).toHaveBeenCalledTimes(1);
   });
 });

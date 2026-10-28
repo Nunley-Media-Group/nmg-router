@@ -100,9 +100,12 @@ describe("/usage entries", () => {
     const engine = fakeEngine({ platform: "linux", http: usageAnswers({ opencode: OPENCODE_OK }) });
     await signIn(engine, "opencode-go", "sentinel-opencode");
     const interrupted = new Error("interrupted");
+    const next = vi.fn(() => Promise.reject(interrupted));
 
-    await expect(handleUsage(depsOf(engine), INPUT, () => Promise.reject(interrupted))).rejects.toBe(interrupted);
+    await expect(handleUsage(depsOf(engine), INPUT, next)).rejects.toBe(interrupted);
 
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(engine.recorded.ui.filter((line) => line === "Provider plan usage")).toHaveLength(1);
     expect(engine.recorded.ui.join("\n")).toContain("OpenCode Go\n  5h 12% · resets in 1h 43m");
   });
 
