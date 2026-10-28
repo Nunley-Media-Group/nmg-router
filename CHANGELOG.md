@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-28
+
+### Changed
+
+- Read image input support from each provider's own model data (#35)
+
 ## [0.10.3] - 2026-10-27
 
 ### Fixed
