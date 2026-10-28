@@ -1,0 +1,45 @@
+**Issue**: #35
+**Date**: 2026-10-27
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/2-add-the-provider-catalog-with-provider-aware-login-and-logout/
+
+# File: tests/features/image-input.feature
+# Generated from: specs/35-read-image-input-support-from-each-provider-s-own-model-data/requirements.md
+Feature: Image input support from each provider's own model data
+
+  @SCN001
+  Scenario: A ClinePass image model receives an image
+    Given ClinePass's model data lists "moonshotai/kimi-k3" with image input and the recommended list offers "cline-pass/kimi-k3"
+    When the catalog refreshes and a routed turn to "cline-pass/kimi-k3" carries an image
+    Then the model is marked vision, its hub detail shows "vision", and the request carries the image
+
+  @SCN002
+  Scenario: An xAI image model is marked vision
+    Given xAI's language-model data lists "grok-4.6" with image input
+    When the catalog refreshes
+    Then "xai/grok-4.6" is marked vision
+
+  @SCN003
+  Scenario: An OpenAI-compatible list states its modalities
+    Given a custom provider lists one model with "input_modalities" ["text", "image"] and one with ["text"]
+    When the catalog refreshes
+    Then the first is marked vision and the second text-only
+
+  @SCN004
+  Scenario: OpenCode Go models carry bundled image support
+    Given OpenCode Go lists "kimi-k3" and "glm-5.3"
+    When the catalog refreshes
+    Then "opencode-go/kimi-k3" is marked vision and "opencode-go/glm-5.3" text-only
+
+  @SCN005
+  Scenario: A text-only model gets the omission note
+    Given "cline-pass/glm-5.3" is text-only
+    When a routed turn to it carries an image
+    Then the image is replaced with "(image omitted: cline-pass/glm-5.3 has no image input)" and the turn completes
+
+  @SCN006
+  Scenario: A failed capability lookup leaves the catalog working
+    Given ClinePass's model data request answers HTTP 500
+    When the catalog refreshes
+    Then ClinePass's status is "ok" and its models are listed with image support from the remaining sources
