@@ -1,0 +1,27 @@
+**Issue**: #44
+**Date**: 2026-10-28
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/40-show-provider-plan-usage-in-the-routed-status-line-and-usage/
+
+# File: tests/features/usage-with-claude.feature
+# Generated from: specs/44-list-claude-s-usage-alongside-the-logged-in-providers-in-usage/requirements.md
+Feature: List Claude's usage alongside the logged-in providers in /usage
+
+  @SCN001 @regression
+  Scenario: Claude's usage is listed with the providers'
+    Given Claude's five_hour window is 23.5% used and its seven_day window 41%, and OpenCode Go has a stored login with a usage reading
+    When the person runs /usage
+    Then after the built-in command, the rows read "Plan usage", then "Claude" with "5h 24%" and "7d 41%", then "OpenCode Go" with its windows
+
+  @SCN002 @regression
+  Scenario: Claude with no reading
+    Given Claude's usage has no rate-limit windows and OpenCode Go has a stored login
+    When the person runs /usage
+    Then the Claude entry reads "No usage reading available" and the OpenCode Go entry is unchanged
+
+  @SCN003 @regression
+  Scenario: No provider login adds nothing
+    Given no login-requiring provider has a stored login
+    When the person runs /usage
+    Then nmg-router adds no rows and the built-in command's result passes through unchanged
