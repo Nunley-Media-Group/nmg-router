@@ -1,0 +1,51 @@
+**Issue**: #43
+**Date**: 2026-10-28
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/40-show-provider-plan-usage-in-the-routed-status-line-and-usage/
+
+# File: tests/features/status-snapshot.feature
+# Generated from: specs/43-publish-the-selected-routed-model-s-plan-usage-for-a-custom-statusline-command/requirements.md
+Feature: Publish the selected routed model's plan usage for a custom statusLine command
+
+  @SCN001
+  Scenario: A routed step publishes the selected provider's windows
+    Given an OpenCode Go model is selected and its usage reading reports 5h, weekly and monthly windows
+    When a routed main-loop step completes
+    Then the session's snapshot under ~/.claude/nmg-router/status names opencode-go, the model and those three windows in order
+
+  @SCN002
+  Scenario: A reading that arrives later updates the snapshot
+    Given an OpenCode Go step's snapshot was written before its usage read finished
+    When the read finishes while OpenCode Go is still shown without an error
+    Then the snapshot is rewritten with the new windows
+
+  @SCN003
+  Scenario: Switching providers never shows the earlier provider's windows
+    Given the snapshot shows OpenCode Go's windows and an OpenCode Go usage read is still running
+    When an xAI main-loop step completes and the OpenCode Go read then finishes
+    Then the snapshot names xai and its model with no windows
+
+  @SCN004
+  Scenario: Errors and Claude steps clear the windows
+    Given the snapshot shows OpenCode Go's windows
+    When a routed main-loop step fails, and later a Claude main-loop step runs
+    Then the failed step's snapshot has no windows, and the Claude step's snapshot has no provider, model or windows
+
+  @SCN005
+  Scenario: The snapshot never affects the routed step
+    Given writing the snapshot fails
+    When a routed main-loop step completes
+    Then the step's answer and the status line are unchanged and no error is shown
+
+  @SCN006
+  Scenario: The snapshot holds no secret and only valid session ids name a file
+    Given a routed step with a sentinel credential
+    When the snapshot is written on Linux
+    Then it holds no credential, the file is 0600 in a 0700 directory and replaced atomically, and a session id "../x" writes no file
+
+  @SCN007
+  Scenario: Subagent steps leave the snapshot alone
+    Given a snapshot for the main loop
+    When a routed subagent step completes
+    Then the snapshot is not rewritten
