@@ -2,8 +2,8 @@ import type { Elements, RenderChildren, RenderElement } from "claude-code";
 import type { HubRow } from "./sources.ts";
 import type { HubView, VisibleRow } from "./hub-state.ts";
 
-// Draws the hub's view model with Box, Text, Input, Button and Select. Each action
-// is a closure the controller supplies, so the drawing holds no state of its own.
+// Draws the hub's view model with Box, Text, Input and Select. Each action is a
+// closure the controller supplies, so the drawing holds no state of its own.
 //
 // A pane holding the keyboard scrolls its body on the arrows and lets the left
 // arrow through to the prompt, which leaves the session for the agents list. A
@@ -18,14 +18,13 @@ import type { HubView, VisibleRow } from "./hub-state.ts";
 // The host's focus ring holds a position in document order, not a key. So the main
 // column, with the search field first, is drawn before the sidebar.
 
-export type HubElements = Pick<Elements["terminal"], "Box" | "Text" | "Button" | "Input" | "Select">;
+export type HubElements = Pick<Elements["terminal"], "Box" | "Text" | "Input" | "Select">;
 
 export type HubActions = {
   selectScope(id: string): void;
   setQuery(text: string): void;
   pick(row: HubRow): void;
   submit(): void;
-  login(providerId: string): void;
 };
 
 export const MODELS_KEY = "models";
@@ -105,32 +104,13 @@ function listChildren(elements: HubElements, view: HubView, actions: HubActions,
   return children;
 }
 
-function lockedChildren(elements: HubElements, view: HubView, actions: HubActions): RenderChildren[] {
-  const { Text, Button } = elements;
-  const locked = view.locked;
-  if (locked === undefined) return [];
-  const children: RenderChildren[] = [
-    Text({ bold: true, children: `${locked.label} has no credentials.` }),
-    Text({ dimColor: true, children: `${locked.rows.length} ${locked.rows.length === 1 ? "model" : "models"} in catalog:` }),
-    ...locked.rows.map((row) => Text({ dimColor: true, children: row.switchArg })),
-    Button({
-      key: "login",
-      label: `Log in to ${locked.label}`,
-      autoFocus: true,
-      onPress: () => actions.login(locked.id),
-    }),
-    Text({ dimColor: true, children: FOOTER }),
-  ];
-  return children;
-}
-
 // `ring` is the key of the element holding the focus ring, when the controller knows it.
 export function drawHub(elements: HubElements, view: HubView, actions: HubActions, ring?: string): RenderElement {
   const { Box } = elements;
   const main = Box({
     flexDirection: "column",
     flexGrow: 1,
-    children: view.mode === "locked" ? lockedChildren(elements, view, actions) : listChildren(elements, view, actions, ring),
+    children: listChildren(elements, view, actions, ring),
   });
   return Box({
     flexDirection: "row-reverse",
@@ -140,12 +120,11 @@ export function drawHub(elements: HubElements, view: HubView, actions: HubAction
 
 // The keys of the elements the ring can rest on, in the order drawHub draws them.
 export function focusableKeys(view: HubView): string[] {
-  const main = view.mode === "locked" ? ["login"] : ["search", ...(view.rows.length > 0 ? [MODELS_KEY] : [])];
+  const main = ["search", ...(view.rows.length > 0 ? [MODELS_KEY] : [])];
   return [...main, SCOPES_KEY];
 }
 
-// Where the ring goes when it has no place of its own: the login, else the models, else the search field.
+// Where the ring goes when it has no place of its own: the models, else the search field.
 export function homeKey(view: HubView): string {
-  if (view.mode === "locked") return "login";
   return view.rows.length > 0 ? MODELS_KEY : "search";
 }

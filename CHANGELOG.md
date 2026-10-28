@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-28
+
+### Changed
+
+- Hide providers without a login from the /model hub (#38)
+
 ## [0.11.0] - 2026-10-28
 
 ### Changed

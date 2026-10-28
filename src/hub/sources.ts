@@ -1,4 +1,3 @@
-import { BUNDLED_METADATA } from "../providers/metadata.ts";
 import type { CatalogModel, Price } from "../providers/types.ts";
 import type { SpeedMap } from "../routing/metrics.ts";
 import { CLAUDE_LINEUP, type ClaudeEntry } from "./claude-lineup.ts";
@@ -27,7 +26,6 @@ export type HubRow = {
 export type HubSource = {
   readonly id: string;
   readonly label: string;
-  isLocked(): boolean;
   rows(): readonly HubRow[];
   refresh?(): Promise<void>;
 };
@@ -39,7 +37,7 @@ export function claudeSource(lineup: readonly ClaudeEntry[] = CLAUDE_LINEUP): Hu
     provider: CLAUDE_ID,
     name: entry.label,
   }));
-  return { id: CLAUDE_ID, label: CLAUDE_LABEL, isLocked: () => false, rows: () => rows };
+  return { id: CLAUDE_ID, label: CLAUDE_LABEL, rows: () => rows };
 }
 
 function catalogRow(model: CatalogModel, speeds: SpeedMap): HubRow {
@@ -58,58 +56,33 @@ function catalogRow(model: CatalogModel, speeds: SpeedMap): HubRow {
   };
 }
 
-// A locked provider previews the models bundled for it, since it has no live list.
-function bundledRows(providerId: string): HubRow[] {
-  const prefix = `${providerId}/`;
-  return Object.entries(BUNDLED_METADATA)
-    .filter(([switchArg]) => switchArg.startsWith(prefix))
-    .map(([switchArg, meta]) => {
-      const id = switchArg.slice(prefix.length);
-      return {
-        id,
-        switchArg,
-        provider: providerId,
-        name: meta.name ?? id,
-        ...(meta.contextWindow === undefined ? {} : { contextWindow: meta.contextWindow }),
-        ...(meta.maxOutput === undefined ? {} : { maxOutput: meta.maxOutput }),
-        ...(meta.price === undefined ? {} : { price: meta.price }),
-        reasoning: (meta.reasoningEfforts?.length ?? 0) > 0,
-        ...(meta.vision === undefined ? {} : { vision: meta.vision }),
-      };
-    });
-}
-
 export type CatalogSourceInput = {
   readonly id: string;
   readonly label: string;
-  readonly locked: boolean;
   readonly models: readonly CatalogModel[];
   readonly speeds: SpeedMap;
   readonly refresh: (providerId: string) => Promise<void>;
 };
 
-// A provider's entry: its catalog models, or the bundled preview while it is locked.
+// A provider's entry: its catalog models.
 export function catalogSource(input: CatalogSourceInput): HubSource {
-  const rows = input.locked
-    ? bundledRows(input.id)
-    : input.models.filter((model) => model.provider === input.id).map((model) => catalogRow(model, input.speeds));
+  const rows = input.models.filter((model) => model.provider === input.id).map((model) => catalogRow(model, input.speeds));
   return {
     id: input.id,
     label: input.label,
-    isLocked: () => input.locked,
     rows: () => rows,
     refresh: () => input.refresh(input.id),
   };
 }
 
 export type SourcesInput = {
-  readonly providers: readonly { readonly id: string; readonly name: string; readonly locked: boolean }[];
+  readonly providers: readonly { readonly id: string; readonly name: string }[];
   readonly models: readonly CatalogModel[];
   readonly speeds: SpeedMap;
   readonly refresh: (providerId: string) => Promise<void>;
 };
 
-// Every source the hub shows: the Claude lineup, then one per enabled provider.
+// Every source the hub shows: the Claude lineup, then one per listed provider.
 export function hubSources(input: SourcesInput): HubSource[] {
   return [
     claudeSource(),
@@ -117,7 +90,6 @@ export function hubSources(input: SourcesInput): HubSource[] {
       catalogSource({
         id: provider.id,
         label: provider.name,
-        locked: provider.locked,
         models: input.models,
         speeds: input.speeds,
         refresh: input.refresh,

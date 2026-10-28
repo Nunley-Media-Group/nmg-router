@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import { createHubController, type HubController, type HubHost } from "../../src/hub/hub-controller.ts";
+import type { CatalogStatus } from "../../src/catalog/cache.ts";
 import type { PaneController } from "../../src/login/pane.ts";
 import type { Services } from "../../src/services.ts";
 import type { CatalogModel, ProviderPlugin } from "../../src/providers/types.ts";
@@ -48,7 +49,8 @@ export const MINI: CatalogModel = {
 
 export const ALL_MODELS: readonly CatalogModel[] = [KIMI, GLM, MINI];
 
-function plugin(id: string, name: string): ProviderPlugin {
+// A provider that needs a stored login, as xAI and OpenCode Go do.
+export function apiKeyPlugin(id: string, name: string): ProviderPlugin {
   return {
     identity: { id, name, baseUrl: "https://example.test" },
     login: { kind: "api-key", validate: async () => ({ kind: "ok" }) },
@@ -57,10 +59,15 @@ function plugin(id: string, name: string): ProviderPlugin {
   };
 }
 
+// A provider that needs no login, so the hub lists it whatever is stored.
+export function freePlugin(id: string, name: string): ProviderPlugin {
+  return { ...apiKeyPlugin(id, name), login: { kind: "none" } };
+}
+
 export const PROVIDER_PLUGINS: readonly ProviderPlugin[] = [
-  plugin("opencode-go", "OpenCode Go"),
-  plugin("openai-codex", "Codex"),
-  plugin("xai", "xAI"),
+  apiKeyPlugin("opencode-go", "OpenCode Go"),
+  apiKeyPlugin("openai-codex", "Codex"),
+  apiKeyPlugin("xai", "xAI"),
 ];
 
 export function idlePane(): PaneController {
@@ -79,23 +86,27 @@ export function idlePane(): PaneController {
 export type StubOptions = {
   readonly logins?: readonly string[];
   readonly models?: readonly CatalogModel[];
+  readonly providers?: readonly ProviderPlugin[];
+  readonly statuses?: Readonly<Record<string, CatalogStatus>>;
   readonly pane?: PaneController;
 };
 
-export type StubServices = Services & { readonly refresh: ReturnType<typeof vi.fn> };
+// `logins` holds the providers with a stored login, and a test may change it between opens.
+export type StubServices = Services & { readonly refresh: ReturnType<typeof vi.fn>; readonly logins: Set<string> };
 
 // The services the hub reads: `refresh` is a spy, and each provider's login is answered by `logins`.
 export function stubServices(options: StubOptions = {}): StubServices {
   const logins = new Set(options.logins ?? ["opencode-go", "openai-codex"]);
   const models = [...(options.models ?? ALL_MODELS)];
+  const providers = [...(options.providers ?? PROVIDER_PLUGINS)];
   const refresh = vi.fn(async (_providerId: string) => undefined);
   const catalog = {
     load: async () => undefined,
     refresh,
     models: () => models,
-    enabledProviders: () => [...PROVIDER_PLUGINS],
-    providers: () => [...PROVIDER_PLUGINS],
-    status: () => "ok",
+    enabledProviders: () => [...providers],
+    providers: () => [...providers],
+    status: (providerId: string) => options.statuses?.[providerId] ?? "ok",
     isEnabled: () => true,
     activeAccount: async () => undefined,
     forget: async () => undefined,
@@ -111,6 +122,7 @@ export function stubServices(options: StubOptions = {}): StubServices {
     pane: options.pane ?? idlePane(),
     platform: async () => "linux",
     refresh,
+    logins,
   } as unknown as StubServices;
 }
 

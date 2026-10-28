@@ -101,6 +101,17 @@ describe("settings rows", () => {
     expect(writtenText(engine, PATH)).toBeDefined();
     expect(writtenText(engine, PATH)).not.toContain("sk-test-not-for-settings");
   });
+
+  // A provider with no login has no catalog models, so the hub's hidden provider gets no picker row either.
+  it("writes no row for a provider whose catalog entry has no models, such as one with no login", async () => {
+    const engine = fakeEngine({ platform: "linux" });
+    await createSettingsRows(engine, { platform: async () => "linux", catalog }).sync();
+    expect(PROVIDER_PLUGINS.map((provider) => provider.identity.id)).toContain("xai");
+    const models = (JSON.parse(writtenText(engine, PATH) ?? "").modelPicker.options as { model: string }[]).map(
+      (row) => row.model,
+    );
+    expect(models.filter((model) => model.startsWith("xai/"))).toEqual([]);
+  });
 });
 
 // Claude Code's watcher can miss a write: one before it starts, or one folded into the

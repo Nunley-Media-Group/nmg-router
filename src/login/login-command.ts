@@ -123,8 +123,8 @@ async function oauthFlow(host: Host, plugin: ProviderPlugin, services: Services)
   }
 }
 
-// Logs one enabled provider in, by the flow its login method names. The model hub
-// runs it for a locked provider; `/login` runs it for a picked one.
+// Logs one enabled provider in, by the flow its login method names. `/login` runs it
+// for the provider picked.
 export async function loginToProvider(host: Host, providerId: string, services: Services): Promise<LoginOutcome> {
   const plugin = services.catalog.enabledProviders().find((entry) => entry.identity.id === providerId);
   if (plugin === undefined) return { ok: false, text: "Login cancelled." };

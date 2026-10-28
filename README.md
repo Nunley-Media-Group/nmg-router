@@ -37,7 +37,7 @@ Run `/logout` to remove a login. It lists Anthropic and each provider with store
 
 ## Choosing a model
 
-Run `/model` with no arguments to open the model hub. It lists "All models", then Claude, then each provider with its model count. A provider you have not logged in to is dimmed and offers "Log in to …".
+Run `/model` with no arguments to open the model hub. It lists "All models", then Claude, then each provider with its model count. A provider that needs a login is listed only after you log in to it, with `/login`.
 
 - Type to search. Enter selects the highlighted model. Esc clears the search, and a second Esc closes the hub.
 - A routed model id is `provider/model`, such as `opencode-go/kimi-k3.1-pro`. `/model <id>` switches straight to one.
