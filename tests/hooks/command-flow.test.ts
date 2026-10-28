@@ -22,9 +22,11 @@ type Node = { readonly props: Record<string, unknown> };
 function registered() {
   const hooks = new Map<string, Hook>();
   const catches = new Map<string, Hook>();
+  // A hook with a matcher answers only its own command, so only an unmatched hook's catch is the login flow's.
   const on = ((event: string, matcher: unknown, hook?: unknown) => {
-    if (!hooks.has(event)) hooks.set(event, (typeof matcher === "function" ? matcher : hook) as Hook);
-    return { catch: (handler: Hook) => catches.set(event, handler) };
+    const unmatched = typeof matcher === "function";
+    if (!hooks.has(event)) hooks.set(event, (unmatched ? matcher : hook) as Hook);
+    return { catch: (handler: Hook) => (unmatched ? catches.set(event, handler) : undefined) };
   }) as unknown as Parameters<typeof register>[0];
   register(on, {} as never);
   return { hooks, catches };

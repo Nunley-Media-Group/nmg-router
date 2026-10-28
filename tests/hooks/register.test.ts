@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { register } from "../../hooks/register.ts";
 import { HUB_PANE_ID } from "../../src/hub/hub-controller.ts";
 import { PANE_ID } from "../../src/login/pane.ts";
@@ -37,9 +37,29 @@ describe("hooks wiring", () => {
       { event: "ui.close", matcher: { id: PANE_ID } },
       { event: "session.start", matcher: undefined },
       { event: "command.run", matcher: { command: "model" } },
+      { event: "command.run", matcher: { command: "usage" } },
       { event: "ui.render", matcher: { component: "Pane", requestId: HUB_PANE_ID } },
       { event: "ui.focus", matcher: { requestId: HUB_PANE_ID } },
       { event: "ui.close", matcher: { id: HUB_PANE_ID } },
     ]);
+  });
+
+  // A failed `/usage` hook still runs Claude Code's own view, through its catch.
+  it("runs the built-in /usage through the usage hook's catch when the hook fails", () => {
+    type Handler = (engine: unknown, e: unknown, next: (e: unknown) => unknown) => unknown;
+    let usageCatch: Handler | undefined;
+    const on = ((event: string, matcher: unknown) => ({
+      catch: (handler: Handler) => {
+        if (event === "command.run" && (matcher as { command?: string } | undefined)?.command === "usage") usageCatch = handler;
+        return undefined;
+      },
+    })) as unknown as Parameters<typeof register>[0];
+    register(on, {} as never);
+
+    const input = { command: "usage", args: "", origin: { kind: "composer" }, presentation: { isFullscreen: false, columns: 200 } };
+    const next = vi.fn(() => ({ text: "built-in" }));
+
+    expect(usageCatch?.({}, input, next)).toEqual({ text: "built-in" });
+    expect(next).toHaveBeenCalledWith(input);
   });
 });

@@ -6,6 +6,7 @@ import { createComposeCapture, type ComposeCapture } from "../../src/routing/com
 import { createRouter, type Router, type RouterHost } from "../../src/routing/router.ts";
 import { createSessionTracker, type SessionTracker } from "../../src/routing/session-tracker.ts";
 import { routeStep, routeStepFailed, type StepNext } from "../../src/routing/turn-step.ts";
+import type { UsageMonitor } from "../../src/usage/monitor.ts";
 import type { ApiMessageInput } from "../../src/translate/messages.ts";
 import { fakeEngine, type FakeEngine, type FakeHttpResponder, type FakeOptions } from "./fake-engine.ts";
 
@@ -50,7 +51,12 @@ export function routerHostOf(engine: FakeEngine): RouterHost {
   } as RouterHost;
 }
 
-export function harness(options: Partial<FakeOptions> = {}, messages: ApiMessageInput[] = [userText("Fix the notes")]): Harness {
+// `monitor` replaces the usage monitor, so a test moves its clock and the 60 s throttle is exact.
+export function harness(
+  options: Partial<FakeOptions> = {},
+  messages: ApiMessageInput[] = [userText("Fix the notes")],
+  monitor?: UsageMonitor,
+): Harness {
   const engine = fakeEngine({
     platform: "linux",
     files: { [`${PLUGIN_ROOT}/.claude-plugin/plugin.json`]: JSON.stringify({ version: VERSION }) },
@@ -61,7 +67,7 @@ export function harness(options: Partial<FakeOptions> = {}, messages: ApiMessage
   const capture = createComposeCapture();
   const tracker = createSessionTracker();
   const view = createRoutedView();
-  return { engine, router: createRouter(routerHostOf(engine), capture, tracker, view), capture, messages, tracker, view };
+  return { engine, router: createRouter(routerHostOf(engine), capture, tracker, view, monitor), capture, messages, tracker, view };
 }
 
 export function userText(text: string): ApiMessageInput {
