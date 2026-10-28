@@ -1,0 +1,89 @@
+**Issue**: #40
+**Date**: 2026-10-27
+**Status**: Approved
+**Author**: Rich Nunley
+**Related Spec**: specs/3-answer-routed-model-turns-through-provider-adapters-with-streaming-tools-thinking-and-clear-errors/
+
+# File: tests/features/provider-usage.feature
+# Generated from: specs/40-show-provider-plan-usage-in-the-routed-status-line-and-usage/requirements.md
+Feature: Show provider plan usage in the routed status line and /usage
+
+  @SCN001
+  Scenario: The status line shows the selected provider's usage windows
+    Given an OpenCode Go model is selected and its usage reading reports 5h, weekly and monthly windows
+    When a routed main-loop step completes
+    Then the status line shows the model, the thinking level and "5h", "weekly" and "monthly" with whole-number percents in that order
+
+  @SCN002
+  Scenario: Switching providers switches the usage shown
+    Given the status line shows OpenCode Go's usage windows
+    When the person selects an xAI model and a routed main-loop step completes while an OpenCode Go usage read is still running
+    Then the status line shows no OpenCode Go windows, even after that read finishes
+
+  @SCN003
+  Scenario: A provider without a usage source shows no usage
+    Given a ClinePass model is selected
+    When a routed main-loop step completes
+    Then the status line shows the model and thinking level only
+    And no usage request is sent
+
+  @SCN004
+  Scenario: Usage endpoint reads are throttled per provider and account
+    Given OpenCode Go's usage endpoint was read 30 seconds ago for the active account
+    When another OpenCode Go main-loop step completes
+    Then no usage request is sent and the status line shows the kept windows
+    And a step completing 60 seconds after that read sends one usage request
+
+  @SCN005
+  Scenario: Codex usage comes from response headers
+    Given an OpenAI Codex routed response carries x-codex-primary and x-codex-secondary rate-limit headers
+    When that routed main-loop step completes
+    Then the status line shows the "5h" and "7d" windows from those headers
+    And no request is sent to the Codex usage endpoint
+
+  @SCN006
+  Scenario: A failed usage read never affects the routed step
+    Given OpenCode Go's usage endpoint answers HTTP 500
+    When a routed main-loop step completes
+    Then the step's answer is unchanged
+    And the status line shows the model and thinking level with the last good windows or none
+
+  @SCN007
+  Scenario: The routed error line keeps its text
+    Given a routed main-loop step fails with an error kind
+    When the status line is updated
+    Then it reads "<model> · <provider> error: <kind>" with no usage windows
+
+  @SCN008
+  Scenario: A Claude model clears the line
+    Given the status line shows OpenCode Go's usage windows
+    When a Claude main-loop step runs
+    Then the status line is cleared
+    And no provider usage request is sent
+
+  @SCN009
+  Scenario: /usage lists every logged-in provider after the built-in command
+    Given stored logins for OpenCode Go, OpenAI Codex and xAI, and none for ClinePass
+    When the person runs /usage
+    Then the built-in usage command runs unchanged
+    And nmg-router's output lists OpenAI Codex, OpenCode Go and xAI in that order with window lines such as "5h 23% · resets in 2h 10m"
+    And xAI shows "No usage reading available" and ClinePass has no entry
+
+  @SCN010
+  Scenario: One failing provider does not hide the others in /usage
+    Given stored logins for OpenCode Go and OpenAI Codex, and OpenAI Codex's usage read answers HTTP 500
+    When the person runs /usage
+    Then OpenAI Codex's entry reads "Usage could not be read: unavailable"
+    And OpenCode Go's entry shows its windows
+
+  @SCN011
+  Scenario: /usage with no provider logins adds nothing
+    Given no login-requiring provider has a stored login
+    When the person runs /usage
+    Then only the built-in usage command's result is returned
+
+  @SCN012
+  Scenario: Credentials never appear in usage output
+    Given a provider usage read that sends a sentinel credential
+    When the status line and /usage output are produced and a usage failure is reported
+    Then the sentinel appears in no status text, /usage output, log line or store write
