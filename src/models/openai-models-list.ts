@@ -1,9 +1,10 @@
 import { getJson, requestHeaders, type HttpOutcome } from "../providers/http.ts";
 import type { DiscoveryOutcome, HttpDeps, ModelSource, ProviderContext, RawModel } from "../providers/types.ts";
+import { visionOf } from "./modalities.ts";
 
 // The list shapes a provider answers with: an object holding an array under one
-// of four keys, or a bare array. Each entry needs an id; the limits are read
-// when present.
+// of four keys, or a bare array. Each entry needs an id; the limits and input
+// modalities are read when present.
 
 const LIST_KEYS = ["data", "models", "result", "items"] as const;
 
@@ -33,6 +34,7 @@ export function parseOpenAiModelList(body: unknown): RawModel[] | undefined {
       id: record.id,
       contextWindow: numberOf(record.context_length) ?? numberOf(record.context_window),
       maxOutput: numberOf(record.max_completion_tokens),
+      vision: visionOf(record),
     });
   }
   return models;

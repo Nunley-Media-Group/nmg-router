@@ -1,6 +1,7 @@
 import { apiKeyLogin, keyCheck } from "../../auth/api-key-login.ts";
+import { staticCapabilities } from "../../models/capability-sources.ts";
 import { openAiModelsList } from "../../models/openai-models-list.ts";
-import type { HeaderContext, ProviderPlugin, ResolvedWire, WireFormat } from "../types.ts";
+import type { HeaderContext, ModelCapabilities, ProviderPlugin, ResolvedWire, WireFormat } from "../types.ts";
 
 // OpenCode Go serves each model over the wire its family uses, so the wire is
 // resolved per model, in this order: a per-id override, the bundled metadata,
@@ -40,9 +41,27 @@ export function openCodeWire(model: string, metadataWire?: WireFormat): Resolved
   return { wire, baseUrl: wire === "anthropic-messages" ? BASE_URL : `${BASE_URL}/v1` };
 }
 
+// OpenCode Go publishes no modality data, so image support is bundled. The
+// values come from oh-my-pi's bundled catalog data (pi-catalog models.json,
+// `opencode-go`), used as reference data only.
+const VISION_MODELS = [
+  "gpt-5.6-luna", "grok-4.5", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3", "mimo-v2-omni",
+  "mimo-v2.5", "minimax-m3", "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-plus", "qwen3.8-max",
+];
+const TEXT_MODELS = [
+  "deepseek-v4-flash", "deepseek-v4-pro", "glm-5", "glm-5.1", "glm-5.2", "glm-5.3", "hy3", "mimo-v2-pro",
+  "mimo-v2.5-pro", "minimax-m2.5", "minimax-m2.7", "qwen3.7-max",
+];
+
+export const OPENCODE_GO_CAPABILITIES: Readonly<Record<string, ModelCapabilities>> = Object.freeze({
+  ...Object.fromEntries(VISION_MODELS.map((model) => [model, { vision: true }])),
+  ...Object.fromEntries(TEXT_MODELS.map((model) => [model, { vision: false }])),
+});
+
 export const openCodeGo: ProviderPlugin = {
   identity: { id: "opencode-go", name: "OpenCode Go", baseUrl: BASE_URL, headers: routedHeaders },
   login: apiKeyLogin({ validate: keyCheck(`${BASE_URL}/v1/models`, () => HEADERS) }),
   models: openAiModelsList({ url: `${BASE_URL}/v1/models`, headers: () => HEADERS }),
+  capabilities: staticCapabilities(OPENCODE_GO_CAPABILITIES),
   wire: openCodeWire,
 };

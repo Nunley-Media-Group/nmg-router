@@ -2,6 +2,7 @@ import { oauthCodeLogin } from "../../auth/oauth-code-login.ts";
 import type { DiscoveryOutcome, Effort, HttpDeps, ModelSource, OAuthCodeConfig, ProviderContext, ProviderPlugin, RawModel } from "../types.ts";
 import { getJson, requestHeaders } from "../http.ts";
 import { toDiscovery } from "../../models/openai-models-list.ts";
+import { visionOf } from "../../models/modalities.ts";
 
 // ChatGPT plan access through the Codex backend. Sign-in is OAuth by paste: the
 // redirect URL is never listened on.
@@ -67,14 +68,13 @@ export function parseCodexModels(body: unknown): RawModel[] | undefined {
     const id = typeof item.slug === "string" ? item.slug : typeof item.id === "string" ? item.id : undefined;
     if (id === undefined || id.trim() === "") continue;
     if (typeof item.visibility === "string" && HIDDEN.has(item.visibility)) continue;
-    const modalities = Array.isArray(item.input_modalities) ? item.input_modalities : [];
     models.push({
       id,
       name: typeof item.display_name === "string" ? item.display_name : undefined,
       contextWindow: typeof item.context_window === "number" ? item.context_window : DEFAULT_CONTEXT,
       maxOutput: DEFAULT_MAX_OUTPUT,
       reasoningEfforts: effortsOf(item.supported_reasoning_levels),
-      vision: modalities.includes("image"),
+      vision: visionOf(item),
     });
   }
   return models;

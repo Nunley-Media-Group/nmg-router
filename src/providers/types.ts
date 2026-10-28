@@ -70,6 +70,18 @@ export type ModelSource = {
   list(deps: HttpDeps, context: ProviderContext): Promise<DiscoveryOutcome>;
 };
 
+// What a capability source can say about one model. A new fact is a new optional field.
+export type ModelCapabilities = { readonly vision?: boolean };
+
+// Looks a model up by its id as the provider's list gives it.
+export type CapabilityIndex = (rawId: string) => ModelCapabilities | undefined;
+
+// A provider's capability data beyond its model list, read after a successful
+// listing. An unreadable source answers undefined, and the listing stands.
+export type CapabilitySource = {
+  read(deps: HttpDeps, context: ProviderContext): Promise<CapabilityIndex | undefined>;
+};
+
 export type ResolvedWire = { readonly wire: WireFormat; readonly baseUrl: string };
 
 // The bundled metadata's wire, when present, is passed in as the second argument.
@@ -83,6 +95,8 @@ export type ProviderPlugin = {
   // The id a request names, from the model's own part of its `provider/model` id,
   // when the provider's API takes another spelling than its list's.
   readonly requestModel?: (model: string) => string;
+  // Capability data the model list leaves out, such as image input.
+  readonly capabilities?: CapabilitySource;
 };
 
 export type CatalogModel = {
