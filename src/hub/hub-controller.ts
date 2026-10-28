@@ -1,7 +1,5 @@
 import type { CommandRunArgs, RenderElement } from "claude-code";
 import type { HostPort } from "../host.ts";
-import { loginToProvider } from "../login/login-command.ts";
-import { createPaneController, type PaneHold } from "../login/pane.ts";
 import type { SpeedMap } from "../routing/metrics.ts";
 import type { Services } from "../services.ts";
 import { ALL_SCOPE, hubView, isOverContext, withQuery, withScope, type HubState } from "./hub-state.ts";
@@ -12,10 +10,6 @@ import { hubSources, type HubRow, type HubSource } from "./sources.ts";
 // The hub's one pane. Its state lives here; the pane's closures and the hooks change
 // it and redraw. A pick the transcript does not fit is refused and the pane stays open;
 // any other pick closes the pane and runs `/model <id>` through the command hook.
-//
-// A locked provider's login runs inside this pane. The host places a pane opened
-// after a press's await only from 110 columns, so a separate login pane, or this one
-// reopened after the login, would wait undrawn on a narrower terminal.
 
 export const HUB_PANE_ID = "nmg-router-models";
 const HUB_TITLE = "Models";
@@ -50,23 +44,18 @@ export function createHubController(services: Services): HubController {
   const refreshed = new Set<string>();
   // The key of the element the focus ring rests on, from `ui.focus`.
   let ring: string | undefined;
-  // The login steps drawn in the hub's pane, and the hold of the login running there.
-  const loginPane = createPaneController({ id: HUB_PANE_ID, lent: true });
-  let loginHold: PaneHold | undefined;
-  const loggingIn = (): boolean => loginHold !== undefined && !loginHold.closed;
 
   const redraw = (): void => host?.ui.invalidate("ui.render");
 
   // The host's ring holds a position, so a redraw that changes the rows or the view
-  // would move it onto another element, or off the pane. This puts it back by key: on
-  // the login button in the locked view, else where it was, else on the models.
+  // would move it onto another element, or off the pane. This puts it back by key: where
+  // it was, else on the models.
   function keepRing(): void {
     const current = host;
-    // A login drawn in the pane places its own ring.
-    if (current === undefined || state === undefined || loggingIn()) return;
+    if (current === undefined || state === undefined) return;
     const view = hubView(state, sources, recent);
     const keys = focusableKeys(view);
-    const key = view.mode === "locked" ? "login" : ring !== undefined && keys.includes(ring) ? ring : homeKey(view);
+    const key = ring !== undefined && keys.includes(ring) ? ring : homeKey(view);
     current.ui.focus({ requestId: HUB_PANE_ID, key }).catch(() => undefined);
   }
 
@@ -91,22 +80,19 @@ export function createHubController(services: Services): HubController {
     }
   }
 
-  // The lists the hub draws: a provider without a stored login is locked.
+  // The providers the hub lists. An enabled provider that needs a login has an entry only
+  // with a stored login, read on every open, so a login or logout shows on the next one.
+  // A stored login counts even when it does not resolve, so the provider keeps its cached models.
   async function rebuild(current: HubHost): Promise<void> {
-    const providers = services.catalog.enabledProviders();
-    const locked = new Set<string>();
-    for (const plugin of providers) {
-      if (plugin.login.kind === "none") continue;
-      if ((await services.credentials.list(plugin.identity.id)).length === 0) locked.add(plugin.identity.id);
+    const listed: { id: string; name: string }[] = [];
+    for (const plugin of services.catalog.enabledProviders()) {
+      if (plugin.login.kind !== "none" && (await services.credentials.list(plugin.identity.id)).length === 0) continue;
+      listed.push({ id: plugin.identity.id, name: plugin.identity.name });
     }
     const speeds = (await current.store.get(SPEED_KEY)) as SpeedMap | undefined;
     recent = recentOf(await current.store.get(RECENT_KEY));
     sources = hubSources({
-      providers: providers.map((plugin) => ({
-        id: plugin.identity.id,
-        name: plugin.identity.name,
-        locked: locked.has(plugin.identity.id),
-      })),
+      providers: listed,
       models: services.catalog.models(),
       speeds: speeds ?? {},
       refresh: (providerId) => services.catalog.refresh(providerId),
@@ -139,7 +125,6 @@ export function createHubController(services: Services): HubController {
       const base: HubState = {
         scope: ALL_SCOPE,
         query: "",
-        view: "list",
         refreshing: new Set(),
         currentModel: await current.session.model(),
         contextTokens: await contextOf(current),
@@ -181,36 +166,6 @@ export function createHubController(services: Services): HubController {
     await current.command.run({ command: "model", args: row.switchArg });
   }
 
-  // A locked provider's login: its steps draw in the hub's pane, and a saved login
-  // returns the hub to that provider's list. The hold is taken before any await, while
-  // the press is still the person's.
-  async function login(providerId: string): Promise<void> {
-    const current = host;
-    if (current === undefined || loggingIn()) return;
-    const begun = await loginPane.begin(current, HUB_TITLE);
-    if (!begun.isPlaced) {
-      current.ui.log(`The login could not be shown: ${begun.reason}`);
-      return;
-    }
-    loginHold = begun.hold;
-    let outcome;
-    try {
-      outcome = await loginToProvider(current, providerId, { ...services, pane: loginPane });
-    } finally {
-      await loginPane.end(begun.hold);
-      if (loginHold === begun.hold) loginHold = undefined;
-      redraw();
-    }
-    current.ui.log(outcome.text);
-    if (!outcome.ok || state === undefined) return;
-    refreshed.add(providerId);
-    await rebuild(current);
-    state = withScope(state, providerId, sources);
-    ring = undefined;
-    redraw();
-    keepRing();
-  }
-
   const actions: HubActions = {
     // A provider picked from the sidebar hands the ring to its models.
     selectScope(id) {
@@ -233,13 +188,11 @@ export function createHubController(services: Services): HubController {
       const target = hubView(state, sources, recent).rows[0];
       if (target !== undefined) settle(() => pick(target.row));
     },
-    login: (providerId) => settle(() => login(providerId)),
   };
 
   return {
     open: (current, scope = ALL_SCOPE) => open(current, scope),
     draw(elements) {
-      if (loggingIn()) return loginPane.draw(elements);
       if (state === undefined) return elements.Box({ children: [] });
       return drawHub(elements, hubView(state, sources, recent), actions, ring);
     },
@@ -250,13 +203,6 @@ export function createHubController(services: Services): HubController {
       redraw();
     },
     refusesClose(origin) {
-      if (origin.kind === "person" && loggingIn()) {
-        // Esc during the login cancels it and returns to the hub.
-        loginPane.closedByHost();
-        redraw();
-        regainKeys();
-        return true;
-      }
       if (state === undefined || origin.kind !== "person" || state.query === "") return false;
       state = withQuery(state, "", sources, recent);
       // Printable keys reach a pane only while an Input holds its ring, so the cleared

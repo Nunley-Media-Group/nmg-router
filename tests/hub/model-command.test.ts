@@ -104,9 +104,8 @@ describe("/model with no arguments", () => {
     expect(h.services.refresh).toHaveBeenCalledTimes(1);
   });
 
-  // A provider picked from the sidebar hands the ring to its models, so the arrows
-  // move through them next; a locked provider's view puts it on the login button.
-  it("puts the ring on the models after a provider pick, and on the login button in the locked view", async () => {
+  // A provider picked from the sidebar hands the ring to its models, so the arrows move through them next.
+  it("puts the ring on the models after a provider pick", async () => {
     const h = await hubHarness();
     await openBare(h);
     await settle();
@@ -115,11 +114,6 @@ describe("/model with no arguments", () => {
     await settle();
     expect(h.engine.recorded.focus.at(-1)).toBe("models");
     expect(optionValues(tree(h), "models").sort()).toEqual(["row:opencode-go/glm-5.1", "row:opencode-go/kimi-k3.1-pro"]);
-
-    h.hub.focused("scopes");
-    chooseScope(tree(h), "xai");
-    await settle();
-    expect(h.engine.recorded.focus.at(-1)).toBe("login");
   });
 
   it("puts the ring on the search field when the search leaves no models to rest on", async () => {
@@ -247,31 +241,5 @@ describe("/model with no arguments", () => {
     await settle();
     keyed(tree(h), "search")?.props.onInput?.("glm");
     expect(textOf(tree(h))).not.toContain("Kept claude-sonnet-5-5");
-  });
-
-  it("draws a locked provider's login in the hub's pane below 110 columns, and Esc cancels back to the hub", async () => {
-    const h = await hubHarness({ columns: 91 });
-    await openBare(h);
-    chooseScope(tree(h), "xai");
-    expect(textOf(tree(h))).toContain("xAI has no credentials.");
-    expect(textOf(tree(h))).toContain("1 model in catalog:");
-    h.engine.pressing(() => keyed(tree(h), "login")?.props.onPress?.());
-    await settle();
-    // No second pane, nothing closed and nothing left undrawn: the key step is in the hub.
-    expect(h.engine.recorded.panes.every((pane) => pane.id === HUB_PANE_ID)).toBe(true);
-    expect(h.engine.recorded.paneCloses).toEqual([]);
-    expect(h.engine.recorded.ui.join("\n")).not.toContain("could not be shown");
-    expect(textOf(tree(h))).toContain("xAI API key");
-    expect(h.engine.keyboard()).toBe(HUB_PANE_ID);
-    expect(h.engine.recorded.focus.at(-1)).toBe("secret");
-
-    h.engine.dropKeys();
-    expect(h.hub.refusesClose({ kind: "person" })).toBe(true);
-    await settle();
-    expect(h.engine.recorded.ui).toContain("Login cancelled.");
-    expect(textOf(tree(h))).toContain("xAI has no credentials.");
-    expect(h.engine.keyboard()).toBe(HUB_PANE_ID);
-    expect(h.engine.recorded.focus.at(-1)).toBe("login");
-    expect(h.engine.recorded.paneCloses).toEqual([]);
   });
 });

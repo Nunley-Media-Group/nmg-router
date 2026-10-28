@@ -13,7 +13,6 @@ export const ALL_SCOPE = "all";
 export type HubState = {
   readonly scope: string;
   readonly query: string;
-  readonly view: "list" | "locked";
   readonly refreshing: ReadonlySet<string>;
   readonly currentModel: string;
   readonly contextTokens: number;
@@ -24,7 +23,6 @@ export type HubState = {
 export type SidebarEntry = {
   readonly id: string;
   readonly label: string;
-  readonly locked: boolean;
   readonly dimmed: boolean;
   readonly focusable: boolean;
 };
@@ -39,7 +37,6 @@ export type VisibleRow = {
 };
 
 export type HubView = {
-  readonly mode: "list" | "locked";
   readonly scope: string;
   readonly query: string;
   readonly sidebar: readonly SidebarEntry[];
@@ -48,7 +45,6 @@ export type HubView = {
   readonly selected?: string;
   readonly detail?: string;
   readonly notice?: string;
-  readonly locked?: { readonly id: string; readonly label: string; readonly rows: readonly HubRow[] };
 };
 
 export function rowKey(row: HubRow): string {
@@ -133,10 +129,9 @@ function visibleRow(row: HubRow, state: HubState): VisibleRow {
   };
 }
 
-// The rows a scope lists. "All models" leaves out a locked provider, whose bundled
-// models only preview in its own entry.
+// The rows a scope lists: "All models" lists every source's rows, another scope its own.
 export function rowsOf(scope: string, sources: readonly HubSource[]): HubRow[] {
-  if (scope === ALL_SCOPE) return sources.filter((source) => !source.isLocked()).flatMap((source) => [...source.rows()]);
+  if (scope === ALL_SCOPE) return sources.flatMap((source) => [...source.rows()]);
   return [...(sources.find((source) => source.id === scope)?.rows() ?? [])];
 }
 
@@ -154,57 +149,42 @@ function scopedRows(state: HubState, sources: readonly HubSource[], recent: Rece
   return isSearching(state.query) ? searchRows(rows, state.query, recent) : sortRows(rows, recent);
 }
 
-// Claude first, then the unlocked providers A–Z, then the locked ones A–Z.
+// Claude first, then the providers A–Z.
 function orderedSources(sources: readonly HubSource[]): HubSource[] {
   const byLabel = (a: HubSource, b: HubSource): number => a.label.localeCompare(b.label);
-  const unlocked = sources.filter((source) => !source.isLocked());
-  const locked = sources.filter((source) => source.isLocked());
   const claudeFirst = (a: HubSource, b: HubSource): number =>
     (a.id === CLAUDE_ID ? 0 : 1) - (b.id === CLAUDE_ID ? 0 : 1) || byLabel(a, b);
-  return [...unlocked.sort(claudeFirst), ...locked.sort(byLabel)];
+  return [...sources].sort(claudeFirst);
 }
 
 export function sidebarEntries(state: HubState, sources: readonly HubSource[], recent: RecentMap): SidebarEntry[] {
   const searching = isSearching(state.query);
   const countOf = (rows: readonly HubRow[]): number =>
     searching ? searchRows(rows, state.query, recent).length : rows.length;
-  const entry = (id: string, label: string, count: number, locked: boolean, refreshing: boolean): SidebarEntry => {
+  const entry = (id: string, label: string, count: number, refreshing: boolean): SidebarEntry => {
     const zero = searching && count === 0;
     return {
       id,
       label: `${label} (${refreshing ? "…" : count})`,
-      locked,
-      dimmed: locked || zero,
+      dimmed: zero,
       focusable: !zero,
     };
   };
-  // "All models" counts the unlocked providers, the same rows its scope lists.
-  const all = entry(ALL_SCOPE, "All models", countOf(rowsOf(ALL_SCOPE, sources)), false, false);
+  // "All models" counts every listed provider, the same rows its scope lists.
+  const all = entry(ALL_SCOPE, "All models", countOf(rowsOf(ALL_SCOPE, sources)), false);
   return [
     all,
     ...orderedSources(sources).map((source) =>
-      entry(source.id, source.label, countOf(source.rows()), source.isLocked(), state.refreshing.has(source.id)),
+      entry(source.id, source.label, countOf(source.rows()), state.refreshing.has(source.id)),
     ),
   ];
 }
 
 export function hubView(state: HubState, sources: readonly HubSource[], recent: RecentMap): HubView {
   const sidebar = sidebarEntries(state, sources, recent);
-  const source = sourceOf(state.scope, sources);
-  if (state.view === "locked" && source?.isLocked() === true) {
-    return {
-      mode: "locked",
-      scope: state.scope,
-      query: state.query,
-      sidebar,
-      rows: [],
-      locked: { id: source.id, label: source.label, rows: [...source.rows()] },
-    };
-  }
   const rows = scopedRows(state, sources, recent).map((row) => visibleRow(row, state));
   const selected = rows.find((candidate) => candidate.current) ?? rows[0];
   return {
-    mode: "list",
     scope: state.scope,
     query: state.query,
     sidebar,
@@ -219,14 +199,11 @@ export function withQuery(state: HubState, query: string, sources: readonly HubS
   const next: HubState = { ...state, query, notice: undefined };
   if (state.scope === ALL_SCOPE || !isSearching(query)) return next;
   const matches = searchRows(rowsOf(state.scope, sources), query, recent).length;
-  return matches === 0 ? { ...next, scope: ALL_SCOPE, view: "list" } : next;
+  return matches === 0 ? { ...next, scope: ALL_SCOPE } : next;
 }
 
-// Selecting a sidebar entry: a locked provider opens its locked view, others the list.
+// Selecting a sidebar entry shows its rows; a scope no entry names falls back to all models.
 export function withScope(state: HubState, scope: string, sources: readonly HubSource[]): HubState {
-  const source = sourceOf(scope, sources);
-  if (scope === ALL_SCOPE || source === undefined) {
-    return { ...state, scope: ALL_SCOPE, view: "list", notice: undefined };
-  }
-  return { ...state, scope, view: source.isLocked() ? "locked" : "list", notice: undefined };
+  const listed = sourceOf(scope, sources) !== undefined;
+  return { ...state, scope: listed ? scope : ALL_SCOPE, notice: undefined };
 }

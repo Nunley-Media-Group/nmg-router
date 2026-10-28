@@ -17,9 +17,8 @@ import { ALL_MODELS } from "../support/hub-harness.ts";
 
 const sources = hubSources({
   providers: [
-    { id: "opencode-go", name: "OpenCode Go", locked: false },
-    { id: "openai-codex", name: "Codex", locked: false },
-    { id: "xai", name: "xAI", locked: true },
+    { id: "opencode-go", name: "OpenCode Go" },
+    { id: "openai-codex", name: "Codex" },
   ],
   models: ALL_MODELS,
   speeds: { "opencode-go/kimi-k3.1-pro": { tokensPerSecond: 118.4, at: 1 } },
@@ -30,7 +29,6 @@ function state(overrides: Partial<HubState> = {}): HubState {
   return {
     scope: ALL_SCOPE,
     query: "",
-    view: "list",
     refreshing: new Set(),
     currentModel: "claude-sonnet-5-5",
     contextTokens: 0,
@@ -45,22 +43,11 @@ function rowNamed(providerId: string, id: string): HubRow {
 }
 
 describe("sidebar", () => {
-  it("lists All models, Claude, the unlocked providers A–Z, then the dimmed locked provider", () => {
+  it("lists All models, Claude, then the providers A–Z, none dimmed while not searching", () => {
     const entries = sidebarEntries(state(), sources, {});
-    expect(entries.map((entry) => entry.label.replace(/ \(.*\)$/, ""))).toEqual([
-      "All models",
-      "Claude",
-      "Codex",
-      "OpenCode Go",
-      "xAI",
-    ]);
-    expect(entries.slice(0, 4).map((entry) => entry.label)).toEqual([
-      "All models (8)",
-      "Claude (5)",
-      "Codex (1)",
-      "OpenCode Go (2)",
-    ]);
-    expect(entries.at(-1)).toMatchObject({ locked: true, dimmed: true, focusable: true });
+    expect(entries.map((entry) => entry.label.replace(/ \(.*\)$/, ""))).toEqual(["All models", "Claude", "Codex", "OpenCode Go"]);
+    expect(entries.map((entry) => entry.label)).toEqual(["All models (8)", "Claude (5)", "Codex (1)", "OpenCode Go (2)"]);
+    expect(entries.every((entry) => !entry.dimmed && entry.focusable)).toBe(true);
   });
 
   it("draws a refreshing provider's count as an ellipsis", () => {
@@ -74,7 +61,7 @@ describe("sidebar", () => {
     expect(byName("All models")).toMatchObject({ dimmed: false, focusable: true });
     expect(byName("Claude")).toMatchObject({ dimmed: true, focusable: false });
     expect(byName("OpenCode Go")?.label).toBe("OpenCode Go (1)");
-    expect(byName("xAI")).toMatchObject({ dimmed: true, focusable: false });
+    expect(byName("Codex")).toMatchObject({ dimmed: false, focusable: true });
   });
 });
 
@@ -136,13 +123,15 @@ describe("rows", () => {
   });
 });
 
-describe("locked provider", () => {
-  it("opens the locked view on its bundled models, and the list again for All models", () => {
-    const locked = withScope(state(), "xai", sources);
-    const view = hubView(locked, sources, {});
-    expect(view.mode).toBe("locked");
-    expect(view.locked?.label).toBe("xAI");
-    expect(view.locked?.rows.every((row) => row.provider === "xai")).toBe(true);
-    expect(hubView(withScope(locked, ALL_SCOPE, sources), sources, {}).mode).toBe("list");
+describe("scopes", () => {
+  it("lists every provider's rows under All models, and only the picked provider's under its own scope", () => {
+    expect(rowsOf(ALL_SCOPE, sources)).toHaveLength(8);
+    const picked = hubView(withScope(state(), "openai-codex", sources), sources, {});
+    expect(picked.scope).toBe("openai-codex");
+    expect(picked.rows.map((row) => row.row.switchArg)).toEqual(["openai-codex/kimi-k3-mini"]);
+  });
+
+  it("falls back to All models for a scope no entry names", () => {
+    expect(withScope(state({ scope: "claude" }), "xai", sources).scope).toBe(ALL_SCOPE);
   });
 });

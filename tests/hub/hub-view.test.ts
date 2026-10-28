@@ -1,15 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { drawHub, focusableKeys, type HubActions } from "../../src/hub/hub-view.ts";
-import { ALL_SCOPE, hubView, withQuery, withScope, type HubState } from "../../src/hub/hub-state.ts";
+import { ALL_SCOPE, hubView, withQuery, type HubState } from "../../src/hub/hub-state.ts";
 import { hubSources, type HubRow } from "../../src/hub/sources.ts";
 import { drawnElements } from "../support/fake-engine.ts";
 import { ALL_MODELS, keyed, nodesOf, textOf } from "../support/hub-harness.ts";
 
 const sources = hubSources({
   providers: [
-    { id: "opencode-go", name: "OpenCode Go", locked: false },
-    { id: "openai-codex", name: "Codex", locked: false },
-    { id: "xai", name: "xAI", locked: true },
+    { id: "opencode-go", name: "OpenCode Go" },
+    { id: "openai-codex", name: "Codex" },
   ],
   models: ALL_MODELS,
   speeds: { "opencode-go/kimi-k3.1-pro": { tokensPerSecond: 118.4, at: 1 } },
@@ -20,7 +19,6 @@ function state(overrides: Partial<HubState> = {}): HubState {
   return {
     scope: ALL_SCOPE,
     query: "",
-    view: "list",
     refreshing: new Set(),
     currentModel: "claude-sonnet-5-5",
     contextTokens: 0,
@@ -35,7 +33,6 @@ function recordingActions(): { actions: HubActions; calls: string[] } {
     setQuery: (text) => calls.push(`query:${text}`),
     pick: (row: HubRow) => calls.push(`pick:${row.switchArg}`),
     submit: () => calls.push("submit"),
-    login: (providerId) => calls.push(`login:${providerId}`),
   };
   return { actions, calls };
 }
@@ -58,7 +55,6 @@ describe("hub view", () => {
       "claude",
       "openai-codex",
       "opencode-go",
-      "xai",
     ]);
     expect(keyed(tree, "models")?.props.value).toBe("row:opencode-go/glm-5.1");
     expect(keyed(tree, "models")?.props.autoFocus).toBe(true);
@@ -120,18 +116,6 @@ describe("hub view", () => {
     const tree = draw(state({ scope: "opencode-go", query: "kimi" }), actions);
     expect(keyed(tree, "search")?.props.value).toBe("kimi");
     expect(textOf(tree)).toContain("↑↓ choose · Enter switch · Tab providers/search · Esc clear/close");
-  });
-
-  it("draws the locked view with the no-credentials text, its bundled models and a focused login button", () => {
-    const { actions } = recordingActions();
-    const tree = draw(withScope(state(), "xai", sources), actions);
-    expect(textOf(tree)).toContain("xAI has no credentials.");
-    expect(textOf(tree)).toContain("1 model in catalog:");
-    expect(textOf(tree)).toContain("xai/grok-4.6");
-    const login = keyed(tree, "login");
-    expect(login?.props.label).toBe("Log in to xAI");
-    expect(login?.props.autoFocus).toBe(true);
-    expect(keyed(tree, "search")).toBeUndefined();
   });
 
   it("says so when nothing matches the search", () => {

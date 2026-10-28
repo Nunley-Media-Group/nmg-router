@@ -63,7 +63,7 @@ describe("a routed image turn on ClinePass", () => {
 
     expect(textOf(routed.chunks)).toBe("Routed answer.");
     expect(parts).toContainEqual({ type: "image_url", image_url: { url: `data:image/png;base64,${PNG}` } });
-    const rows = catalogSource({ id: "cline-pass", label: "ClinePass", locked: false, models: catalog.models(), speeds: {}, refresh: async () => undefined }).rows();
+    const rows = catalogSource({ id: "cline-pass", label: "ClinePass", models: catalog.models(), speeds: {}, refresh: async () => undefined }).rows();
     expect(detailLine(rows.find((row) => row.switchArg === "cline-pass/kimi-k3")!)).toContain("vision");
     expect(detailLine(rows.find((row) => row.switchArg === "cline-pass/glm-5.3")!)).not.toContain("vision");
   });

@@ -18,10 +18,6 @@ import { applyInput, maskOf } from "./masked-input.ts";
 // the ring onto its field with `ui.focus`, asking for the keys again if the pane
 // lost them. A `begin` hands back its hold, and only that hold's `end` closes the
 // pane, so a flow superseded by the next command cannot close that command's pane.
-//
-// The model hub lends its own pane for a locked provider's login (`lent`): the steps
-// draw there, so no second pane has to be placed, and the controller never closes it
-// or holds its toasts; a step it would close ends and hands the pane back instead.
 
 export const PANE_ID = "nmg-router-login";
 
@@ -91,21 +87,14 @@ export type PaneController = {
   isOpen(): boolean;
 };
 
-// The pane a controller draws in: the login pane by default, or another lent to it.
-export type PaneSite = { readonly id: string; readonly lent: boolean };
-
-const LOGIN_SITE: PaneSite = { id: PANE_ID, lent: false };
-
-export function createPaneController(site: PaneSite = LOGIN_SITE): PaneController {
-  const openArgs: PaneOpenArgs = { id: site.id, focus: true, closeOnEscape: true, ...(site.lent ? {} : { holdToasts: true }) };
+export function createPaneController(): PaneController {
+  const openArgs: PaneOpenArgs = { id: PANE_ID, focus: true, closeOnEscape: true, holdToasts: true };
   let pending: Pending | undefined;
   // The pane held open by the latest `begin`, until its `end`.
   let held: PaneHold | undefined;
 
-  // A lent pane stays open for its owner, which draws its own view again.
   async function closeSite(host: PaneHost): Promise<void> {
-    if (site.lent) host.ui.invalidate("ui.render");
-    else await host.ui.close({ id: site.id }).catch(() => undefined);
+    await host.ui.close({ id: PANE_ID }).catch(() => undefined);
   }
 
   function settle(result: PaneResult, closePane: boolean): void {
@@ -137,7 +126,7 @@ export function createPaneController(site: PaneSite = LOGIN_SITE): PaneControlle
   // Puts the ring on the step's field. A held pane that lost the keyboard while
   // the flow worked asks for it again, as its first open did, and retries once.
   async function focusStep(hold: PaneHold, view: PaneView): Promise<void> {
-    const target = { requestId: site.id, key: fieldOf(view) };
+    const target = { requestId: PANE_ID, key: fieldOf(view) };
     try {
       if ((await hold.host.ui.focus(target)).deny === undefined || hold !== held || hold.closed) return;
       const opened = await hold.host.ui.open({ ...openArgs, title: view.title });
