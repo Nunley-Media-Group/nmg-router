@@ -1,0 +1,51 @@
+{
+  "data": [
+    {
+      "id": "moonshotai/kimi-k3",
+      "name": "MoonshotAI: Kimi K3",
+      "context_length": 1048576,
+      "architecture": { "modality": "text+image+video->text", "input_modalities": ["text", "image", "video"], "output_modalities": ["text"] }
+    },
+    {
+      "id": "z-ai/glm-5.3",
+      "name": "Z.ai: GLM 5.3",
+      "context_length": 1000000,
+      "architecture": { "modality": "text->text", "input_modalities": ["text"], "output_modalities": ["text"] }
+    },
+    {
+      "id": "z-ai/glm-5.3:batch",
+      "name": "Z.ai: GLM 5.3 (batch)",
+      "architecture": { "modality": "text->text", "input_modalities": ["text"], "output_modalities": ["text"] }
+    },
+    {
+      "id": "deepseek/deepseek-v4.1-flash",
+      "name": "DeepSeek: DeepSeek V4.1 Flash",
+      "architecture": { "modality": "text+image->text" }
+    },
+    {
+      "id": "nvidia/nemotron-3.5-lightning",
+      "name": "NVIDIA: Nemotron 3.5 Lightning",
+      "architecture": { "modality": "text->text", "input_modalities": ["text"], "output_modalities": ["text"] }
+    },
+    {
+      "id": "nvidia/nemotron-3.5-lightning:free",
+      "name": "NVIDIA: Nemotron 3.5 Lightning (free)",
+      "architecture": { "modality": "text->text", "input_modalities": ["text"], "output_modalities": ["text"] }
+    },
+    {
+      "id": "nvidia/nemotron-3.5-super-vl",
+      "name": "NVIDIA: Nemotron 3.5 Super VL",
+      "architecture": { "modality": "text+image+video->text", "input_modalities": ["text", "image", "video"], "output_modalities": ["text"] }
+    },
+    {
+      "id": "acme/twin-model",
+      "name": "Acme: Twin Model",
+      "architecture": { "input_modalities": ["text", "image"], "output_modalities": ["text"] }
+    },
+    {
+      "id": "globex/twin-model",
+      "name": "Globex: Twin Model",
+      "architecture": { "input_modalities": ["text"], "output_modalities": ["text"] }
+    }
+  ]
+}

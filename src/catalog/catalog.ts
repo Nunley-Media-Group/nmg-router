@@ -10,7 +10,7 @@ import { BUILTIN_PROVIDERS } from "../providers/builtin/index.ts";
 import { customProvider } from "../providers/custom.ts";
 import { createProviderRegistry } from "../providers/registry.ts";
 import { metadataFor } from "../providers/metadata.ts";
-import type { Auth, CatalogModel, ProviderPlugin, RawModel } from "../providers/types.ts";
+import type { Auth, CapabilityIndex, CatalogModel, ProviderContext, ProviderPlugin, RawModel } from "../providers/types.ts";
 import { parseModelId, toModelId } from "../models/model-id.ts";
 import { modelEnabled } from "../models/patterns.ts";
 import { EMPTY_CACHE, readCache, writeCache, type CatalogCache, type CatalogStatus } from "./cache.ts";
@@ -82,7 +82,9 @@ export function createCatalog(deps: CatalogDeps, builtins: readonly ProviderPlug
     return cache.providers[providerId]?.models ?? [];
   }
 
-  function buildModels(plugin: ProviderPlugin, raws: readonly RawModel[]): CatalogModel[] {
+  // A fact comes from the model's list entry, then the provider's capability
+  // source, then the bundled metadata.
+  function buildModels(plugin: ProviderPlugin, raws: readonly RawModel[], capabilities?: CapabilityIndex): CatalogModel[] {
     const providerId = plugin.identity.id;
     const models = new Map<string, CatalogModel>();
     for (const raw of raws) {
@@ -101,7 +103,7 @@ export function createCatalog(deps: CatalogDeps, builtins: readonly ProviderPlug
         contextWindow: raw.contextWindow ?? metadata?.contextWindow,
         maxOutput: raw.maxOutput ?? metadata?.maxOutput,
         reasoningEfforts: raw.reasoningEfforts ?? metadata?.reasoningEfforts,
-        vision: raw.vision ?? metadata?.vision,
+        vision: raw.vision ?? capabilities?.(raw.id)?.vision ?? metadata?.vision,
         price: raw.price ?? metadata?.price,
       });
     }
@@ -130,12 +132,28 @@ export function createCatalog(deps: CatalogDeps, builtins: readonly ProviderPlug
       }
     }
 
-    const outcome = await plugin.models.list(deps, { platform: await platform(), auth });
+    const context = { platform: await platform(), auth };
+    const outcome = await plugin.models.list(deps, context);
     if (outcome.kind !== "ok") {
       record(providerId, outcome.kind, keptModels(providerId), now);
       return;
     }
-    record(providerId, "ok", buildModels(plugin, outcome.models), now);
+    const capabilities = await capabilitiesOf(plugin, context);
+    record(providerId, "ok", buildModels(plugin, outcome.models, capabilities), now);
+  }
+
+  // Capability data only adds to a listing, so a source that fails leaves the
+  // listing as it is and is noted in the debug log alone.
+  async function capabilitiesOf(plugin: ProviderPlugin, context: ProviderContext): Promise<CapabilityIndex | undefined> {
+    if (plugin.capabilities === undefined) return undefined;
+    let index: CapabilityIndex | undefined;
+    try {
+      index = await plugin.capabilities.read(deps, context);
+    } catch {
+      index = undefined;
+    }
+    if (index === undefined) deps.ui.log(`${plugin.identity.name} capability data unavailable`, { to: "debug" });
+    return index;
   }
 
   async function loadState(): Promise<void> {
