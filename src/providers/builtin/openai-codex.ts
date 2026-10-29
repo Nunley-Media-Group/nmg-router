@@ -3,6 +3,8 @@ import type { DiscoveryOutcome, Effort, HttpDeps, ModelSource, OAuthCodeConfig, 
 import { getJson, requestHeaders } from "../http.ts";
 import { toDiscovery } from "../../models/openai-models-list.ts";
 import { visionOf } from "../../models/modalities.ts";
+import { epochOf, percentOf, recordOf, windowLabel, type UsageReport, type UsageWindow } from "../../usage/report.ts";
+import { endpointUsage } from "../../usage/sources.ts";
 
 // ChatGPT plan access through the Codex backend. Sign-in is OAuth by paste: the
 // redirect URL is never listened on.
@@ -80,6 +82,49 @@ export function parseCodexModels(body: unknown): RawModel[] | undefined {
   return models;
 }
 
+const USAGE_URL = `${BASE_URL}/wham/usage`;
+
+// The usage endpoint's `rate_limit` windows, primary then secondary. A window needs
+// its used percent and its length in seconds; one without them is left out.
+export function parseCodexUsage(body: unknown): UsageReport | undefined {
+  const rateLimit = recordOf(recordOf(body).rate_limit);
+  const windows: UsageWindow[] = [];
+  for (const [id, key] of [
+    ["primary", "primary_window"],
+    ["secondary", "secondary_window"],
+  ] as const) {
+    const window = recordOf(rateLimit[key]);
+    const usedPercent = percentOf(window.used_percent);
+    const seconds = window.limit_window_seconds;
+    if (usedPercent === undefined || typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) continue;
+    const resetsAt = epochOf(window.reset_at);
+    const label = windowLabel(Math.max(1, Math.round(seconds / 60)));
+    windows.push({ id, label, usedPercent, ...(resetsAt === undefined ? {} : { resetsAt }) });
+  }
+  return windows.length === 0 ? undefined : { windows };
+}
+
+// The windows a routed response's `x-codex-*` headers report, primary then secondary.
+// A window needs its used percent and its length in minutes. None present answers undefined.
+export function parseCodexUsageHeaders(headers: Readonly<Record<string, string>>): UsageReport | undefined {
+  const windows: UsageWindow[] = [];
+  for (const id of ["primary", "secondary"]) {
+    const prefix = `x-codex-${id}-`;
+    const usedPercent = percentOf(numberOfText(headers[`${prefix}used-percent`]));
+    const minutes = numberOfText(headers[`${prefix}window-minutes`]);
+    if (usedPercent === undefined || minutes === undefined || !Number.isInteger(minutes) || minutes <= 0) continue;
+    const resetsAt = epochOf(numberOfText(headers[`${prefix}reset-at`]));
+    windows.push({ id, label: windowLabel(minutes), usedPercent, ...(resetsAt === undefined ? {} : { resetsAt }) });
+  }
+  return windows.length === 0 ? undefined : { windows };
+}
+
+function numberOfText(text: string | undefined): number | undefined {
+  if (text === undefined || text.trim() === "") return undefined;
+  const value = Number(text);
+  return Number.isFinite(value) ? value : undefined;
+}
+
 const models: ModelSource = {
   async list(deps: HttpDeps, context: ProviderContext): Promise<DiscoveryOutcome> {
     const outcome = await getJson(
@@ -101,4 +146,8 @@ export const openaiCodex: ProviderPlugin = {
   login: oauthCodeLogin(CODEX_OAUTH),
   models,
   wire: () => ({ wire: "openai-codex-responses", baseUrl: BASE_URL }),
+  usage: {
+    ...endpointUsage({ url: USAGE_URL, headers: ({ auth }) => headersFor(auth?.accountId), parse: parseCodexUsage }),
+    fromHeaders: parseCodexUsageHeaders,
+  },
 };

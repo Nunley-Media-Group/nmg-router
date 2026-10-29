@@ -19,8 +19,11 @@ import { createRouter, type Router, type RouterHost } from "../src/routing/route
 import { createSessionTracker } from "../src/routing/session-tracker.ts";
 import { routeStep, routeStepFailed } from "../src/routing/turn-step.ts";
 import { createServices, type Services } from "../src/services.ts";
+import { createStatusSnapshotWriter } from "../src/usage/status-snapshot.ts";
+import { createUsageMonitor } from "../src/usage/monitor.ts";
+import { handleUsage, type UsageCommandDeps } from "../src/usage/usage-command.ts";
 
-// Wires /login, /logout, the login pane, the model hub, the routed turns, routed
+// Wires /login, /logout, /usage, the login pane, the model hub, the routed turns, routed
 // compaction and routed auto-mode permissions to src/. The host reads a name, key or
 // path only where it is written literally at a call site, so the port spells out each
 // environment name and store key the mod uses. One pane serves the engine: a
@@ -181,6 +184,8 @@ export const register: Register = (on, options) => {
   const flows = createCommandFlows();
   const capture = createComposeCapture();
   const tracker = createSessionTracker();
+  // The usage readings the routed status line and `/usage` share.
+  const usage = createUsageMonitor();
   const permissionMode = createPermissionModeTracker();
   const readMode = createModeReader(options);
   const view = createRoutedView();
@@ -203,8 +208,17 @@ export const register: Register = (on, options) => {
   const hubFor = (host: HubHost): HubController => (hub ??= createHubController(servicesFor(host)));
 
   // The router and the compaction and permission deps share one host, the first one
-  // a hook built, as the router always has. They take a port, never `$`.
-  const routerFor = (host: RouterHost): Router => (router ??= createRouter(host, capture, tracker, view));
+  // a hook built, as the router always has. They take a port, never `$`. The status
+  // snapshot writes through that same port, with the shared services' platform.
+  const routerFor = (host: RouterHost): Router =>
+    (router ??= createRouter(
+      host,
+      capture,
+      tracker,
+      view,
+      usage,
+      createStatusSnapshotWriter(host, () => servicesFor(host).platform()),
+    ));
   const compactDeps = (host: RouterHost): CompactDeps => ({
     router: routerFor(host),
     tracker,
@@ -229,6 +243,19 @@ export const register: Register = (on, options) => {
     host,
     askPerson,
   });
+  // The login services the hub shares, and the monitor the router shares.
+  const usageDeps = (host: HostPort): UsageCommandDeps => {
+    const services = servicesFor(host);
+    return {
+      catalog: services.catalog,
+      credentials: services.credentials,
+      http: host.http,
+      platform: services.platform,
+      monitor: usage,
+      now: Date.now,
+      log: (text) => host.ui.log(text),
+    };
+  };
 
   on("command.run", ($, e, next) => {
     if (e.command !== "login" && e.command !== "logout") return next(e);
@@ -332,6 +359,13 @@ export const register: Register = (on, options) => {
     const rowLoaded = (model: string): Promise<boolean> => modelPickerRows?.loaded(model) ?? Promise.resolve(true);
     return handleModelCommand(host, e, next, hubFor(host), rowLoaded);
   });
+
+  // `/usage` shows Claude Code's own view, then transcript rows with one entry per provider the person is logged in to. A failed hook still runs that view.
+  // In the catch `next` is replay-safe: after the hook called it (an interrupted panel rejects), `next(e)` passes that
+  // settlement on without running `/usage` again; only a hook that failed before calling it runs the built-in view here.
+  on("command.run", { command: "usage" }, ($, e, next) => handleUsage(usageDeps(hostPort($)), e, next)).catch((_, e, next) =>
+    next(e),
+  );
 
   on("ui.render", { component: "Pane", requestId: HUB_PANE_ID }, ($, e, next) => {
     if (e.surface !== "terminal" || hub === undefined) return next(e);

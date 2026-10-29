@@ -1,6 +1,8 @@
 import { apiKeyLogin, keyCheck } from "../../auth/api-key-login.ts";
 import { staticCapabilities } from "../../models/capability-sources.ts";
 import { openAiModelsList } from "../../models/openai-models-list.ts";
+import { epochOf, percentOf, recordOf, type UsageReport, type UsageWindow } from "../../usage/report.ts";
+import { endpointUsage } from "../../usage/sources.ts";
 import type { HeaderContext, ModelCapabilities, ProviderPlugin, ResolvedWire, WireFormat } from "../types.ts";
 
 // OpenCode Go serves each model over the wire its family uses, so the wire is
@@ -58,10 +60,35 @@ export const OPENCODE_GO_CAPABILITIES: Readonly<Record<string, ModelCapabilities
   ...Object.fromEntries(TEXT_MODELS.map((model) => [model, { vision: false }])),
 });
 
+const USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
+
+// The usage endpoint's three windows, as their id and label, in the order they are shown.
+const USAGE_WINDOWS = [
+  ["rolling", "5h"],
+  ["weekly", "weekly"],
+  ["monthly", "monthly"],
+] as const;
+
+// Each window needs its percent and its reset time. A body missing or mis-shaping any of the three is not read.
+export function parseOpenCodeGoUsage(body: unknown): UsageReport | undefined {
+  const usage = recordOf(recordOf(body).usage);
+  const windows: UsageWindow[] = [];
+  for (const [id, label] of USAGE_WINDOWS) {
+    const window = recordOf(usage[id]);
+    const percent = window.percent;
+    const usedPercent = typeof percent === "number" && percent >= 0 && percent <= 100 ? percentOf(percent) : undefined;
+    const resetsAt = epochOf(window.resetsAt);
+    if (usedPercent === undefined || resetsAt === undefined) return undefined;
+    windows.push({ id, label, usedPercent, resetsAt });
+  }
+  return { windows };
+}
+
 export const openCodeGo: ProviderPlugin = {
   identity: { id: "opencode-go", name: "OpenCode Go", baseUrl: BASE_URL, headers: routedHeaders },
   login: apiKeyLogin({ validate: keyCheck(`${BASE_URL}/v1/models`, () => HEADERS) }),
   models: openAiModelsList({ url: `${BASE_URL}/v1/models`, headers: () => HEADERS }),
   capabilities: staticCapabilities(OPENCODE_GO_CAPABILITIES),
   wire: openCodeWire,
+  usage: endpointUsage({ url: USAGE_URL, headers: () => HEADERS, parse: parseOpenCodeGoUsage }),
 };
