@@ -7,6 +7,8 @@ import { createRouter, type Router, type RouterHost } from "../../src/routing/ro
 import { createSessionTracker, type SessionTracker } from "../../src/routing/session-tracker.ts";
 import { routeStep, routeStepFailed, type StepNext } from "../../src/routing/turn-step.ts";
 import type { UsageMonitor } from "../../src/usage/monitor.ts";
+import type { UsageReport } from "../../src/usage/report.ts";
+import type { StatusSnapshotWriter } from "../../src/usage/status-snapshot.ts";
 import type { ApiMessageInput } from "../../src/translate/messages.ts";
 import { fakeEngine, type FakeEngine, type FakeHttpResponder, type FakeOptions } from "./fake-engine.ts";
 
@@ -51,11 +53,13 @@ export function routerHostOf(engine: FakeEngine): RouterHost {
   } as RouterHost;
 }
 
-// `monitor` replaces the usage monitor, so a test moves its clock and the 60 s throttle is exact.
+// `monitor` replaces the usage monitor, so a test moves its clock and the 60 s throttle is exact. `snapshot`
+// is the router's status-snapshot writer; without one the router writes no snapshot.
 export function harness(
   options: Partial<FakeOptions> = {},
   messages: ApiMessageInput[] = [userText("Fix the notes")],
   monitor?: UsageMonitor,
+  snapshot?: StatusSnapshotWriter,
 ): Harness {
   const engine = fakeEngine({
     platform: "linux",
@@ -67,7 +71,22 @@ export function harness(
   const capture = createComposeCapture();
   const tracker = createSessionTracker();
   const view = createRoutedView();
-  return { engine, router: createRouter(routerHostOf(engine), capture, tracker, view, monitor), capture, messages, tracker, view };
+  return { engine, router: createRouter(routerHostOf(engine), capture, tracker, view, monitor, snapshot), capture, messages, tracker, view };
+}
+
+// One call the router made on its snapshot writer, in order.
+export type SnapshotCall =
+  | { readonly kind: "show"; readonly sessionId: string; readonly provider: string; readonly model: string; readonly usage: UsageReport | undefined }
+  | { readonly kind: "clear"; readonly sessionId: string };
+
+// A snapshot writer that records its calls, so a test checks what the router publishes.
+export function recordingSnapshot(): { readonly writer: StatusSnapshotWriter; readonly calls: SnapshotCall[] } {
+  const calls: SnapshotCall[] = [];
+  const writer: StatusSnapshotWriter = {
+    show: (sessionId, provider, model, usage) => calls.push({ kind: "show", sessionId, provider, model, usage }),
+    clear: (sessionId) => calls.push({ kind: "clear", sessionId }),
+  };
+  return { writer, calls };
 }
 
 export function userText(text: string): ApiMessageInput {

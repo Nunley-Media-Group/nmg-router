@@ -34,6 +34,7 @@ import { MAIN_LOOP, createSessionTracker, type SessionTracker } from "./session-
 import { speedOf, withSpeed, type SpeedRecord } from "./metrics.ts";
 import { renderStatus, thinkingOf, type RoutedStatus, type Thinking } from "./status.ts";
 import { createUsageMonitor, type UsageMonitor } from "../usage/monitor.ts";
+import type { StatusSnapshotWriter } from "../usage/status-snapshot.ts";
 
 // Answers a routed model's turn step through the provider's wire. It sends one
 // request, streams the reply back as engine chunks, and answers any failure with
@@ -106,6 +107,15 @@ const SUMMARY_TURN = "compaction";
 
 function stepKey(e: TurnStepInput): string {
   return `${e.agentId ?? ""}:${e.turnId}:${e.index}`;
+}
+
+// The status snapshot never changes a step: a writer that throws is ignored.
+function quietly(write: () => void): void {
+  try {
+    write();
+  } catch {
+    // The snapshot is best effort.
+  }
 }
 
 type Tally = {
@@ -241,6 +251,7 @@ export function createRouter(
   tracker: SessionTracker = createSessionTracker(),
   view: RoutedView = createRoutedView(),
   monitor: UsageMonitor = createUsageMonitor(),
+  snapshot?: StatusSnapshotWriter,
 ): Router {
   const services = createServices(host);
   const { catalog, credentials } = services;
@@ -254,6 +265,8 @@ export function createRouter(
   const steps = new Map<string, Progress>();
   // What the status line shows: a routed step's state, until a Claude main-loop step clears it.
   let shown: RoutedStatus | undefined;
+  // The session the shown state belongs to, for its snapshot. Undefined when the session id could not be read.
+  let shownSessionId: string | undefined;
 
   async function providerOf(model: string): Promise<ProviderPlugin | undefined> {
     const parsed = parseModelId(model);
@@ -383,10 +396,21 @@ export function createRouter(
     return { tally: tallied, aborted: false, sentAt, firstAt: gate.firstAt, headers: response.headers };
   }
 
-  // Sets the status line to a state and draws it.
-  function show(state: RoutedStatus): void {
+  // The session's id for its snapshot. A host that cannot give it leaves the snapshot out, and the status line still shows.
+  async function sessionOrUndefined(): Promise<string | undefined> {
+    try {
+      return await host.session.id();
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Sets the status line to a state, draws it, and publishes the state for a custom status-line command.
+  function show(state: RoutedStatus, sessionId: string | undefined): void {
     shown = state;
+    shownSessionId = sessionId;
     host.ui.status(renderStatus(state));
+    if (sessionId !== undefined) quietly(() => snapshot?.show(sessionId, state.provider.id, state.model, state.usage));
   }
 
   // Shows a routed main-loop step's answer. Its usage is the step's own headers when they carry it, else the provider's
@@ -403,7 +427,10 @@ export function createRouter(
     const source = plugin.usage;
     const fromHeaders = source?.fromHeaders?.(headers);
     if (fromHeaders !== undefined) monitor.record(id, account, fromHeaders);
-    show({ provider: { id, name: plugin.identity.name }, account, model, thinking, usage: monitor.latest(id, account) });
+    show(
+      { provider: { id, name: plugin.identity.name }, account, model, thinking, usage: monitor.latest(id, account) },
+      context.sessionId,
+    );
     if (source === undefined || fromHeaders !== undefined) return;
     void monitor
       .read(id, account, () => source.read(host, { platform: context.platform, auth: context.auth }))
@@ -420,7 +447,7 @@ export function createRouter(
     if (shown === undefined || shown.error !== undefined || shown.provider.id !== provider || shown.account !== account) return;
     const usage = monitor.latest(provider, account);
     if (usage === shown.usage) return;
-    show({ ...shown, usage });
+    show({ ...shown, usage }, shownSessionId);
   }
 
   // The answer for a failed step: its message as text, then an end of turn. The
@@ -436,7 +463,9 @@ export function createRouter(
     if (signal.aborted) return { turnId: e.turnId, index: e.index, answer: "", toolUses: [], stopReason: "end_turn", usage: null };
     const routed = toRouted(name, error);
     if (e.agentId === undefined) {
-      show({ provider: { id: parseModelId(e.model)?.provider ?? e.model, name }, account: undefined, model: e.model, error: routed.kind });
+      const provider = { id: parseModelId(e.model)?.provider ?? e.model, name };
+      const sessionId = await sessionOrUndefined();
+      show({ provider, account: undefined, model: e.model, error: routed.kind }, sessionId);
     }
     yield { kind: "text", index: blocks, text: routed.message };
     yield { kind: "stop", stopReason: "end_turn", usage: null };
@@ -513,8 +542,11 @@ export function createRouter(
 
     claudeStep(e) {
       if (e.agentId !== undefined || shown === undefined) return;
+      const sessionId = shownSessionId;
       shown = undefined;
+      shownSessionId = undefined;
       host.ui.status(undefined);
+      if (sessionId !== undefined) quietly(() => snapshot?.clear(sessionId));
     },
 
     async *answer(e, signal) {

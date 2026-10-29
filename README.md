@@ -51,6 +51,16 @@ Set the effort level with Claude Code's effort setting, as you would for Claude.
 
 The status line shows the routed model and the effective level.
 
+### Status-line snapshot
+
+Claude Code's status-line input carries rate limits only for Claude, so a custom `statusLine` command cannot see a routed model's plan usage from it. The mod also writes the selected routed model's usage windows to a file for that command to read.
+
+- macOS and Linux: `<config dir>/nmg-router/status/<session id>.json`. Windows: `<config dir>\nmg-router\status\<session id>.json`.
+- The config dir is `CLAUDE_CONFIG_DIR` when it is set, else `~/.claude` (`%USERPROFILE%\.claude` on Windows).
+- The file is JSON with `version` (1), `sessionId`, `provider`, `model` and `windows`. Each window has a `label`, a `usedPercent` and, when the provider reports it, `resetsAt` in epoch milliseconds. It holds no token, key or account.
+- Read it only when its `sessionId` and `model` match the status-line input's `session_id` and `model.id`.
+- A failed routed step leaves `windows` empty. A Claude model's step clears the file to `version`, `sessionId` and an empty `windows`, with no provider or model. A subagent's step leaves the file as it is.
+
 ## Auto-mode permissions
 
 The `/config` row "Routed auto-mode permissions" (`routedAutoPermissions`) decides how auto mode handles tool calls from routed models.

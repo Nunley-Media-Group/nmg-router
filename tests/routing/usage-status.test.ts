@@ -5,9 +5,10 @@ import { encodeSecret } from "../../src/auth/accounts.ts";
 import { createCredentialStore } from "../../src/credentials/store.ts";
 import { routeStep } from "../../src/routing/turn-step.ts";
 import { createUsageMonitor, type UsageMonitor } from "../../src/usage/monitor.ts";
+import type { StatusSnapshotWriter } from "../../src/usage/status-snapshot.ts";
 import type { FakeEngine, FakeHttpReply, FakeHttpResponder } from "../support/fake-engine.ts";
 import { assertNoSentinel, makeSentinel } from "../support/sentinel.ts";
-import { CHAT_URL, MODEL, chatTurn, collect, harness, remember, signIn, spyNext, step, textOf } from "../support/routing.ts";
+import { CHAT_URL, MODEL, SESSION, chatTurn, collect, harness, recordingSnapshot, remember, signIn, spyNext, step, textOf, userText } from "../support/routing.ts";
 
 const USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -314,5 +315,158 @@ describe("the routed status line with provider usage", () => {
     await vi.waitFor(() => expect(statusOf(h.engine)).toBe(OPENCODE_LINE));
 
     assertNoSentinel(h.engine, sentinel, h.engine.recorded.status);
+  });
+});
+
+// The snapshot the router publishes for a custom status-line command: the shown provider's windows on each routed
+// main-loop step and once its reading settles, a cleared snapshot on a Claude main-loop step, and nothing from a subagent.
+describe("the routed status snapshot", () => {
+  it("publishes the model with no windows, then the windows once the provider's reading settles", async () => {
+    const { writer, calls } = recordingSnapshot();
+    const h = harness({ http: answers({ usage: () => OPENCODE_OK, chat: [ok()] }) }, undefined, undefined, writer);
+    await h.engine.store.set("catalog.cache", CACHE);
+    await signIn(h.engine);
+    remember(h.capture);
+    const release = holdUsage(h.engine);
+
+    await collect(routeStep(h.router, step(0), spyNext()));
+    expect(calls).toEqual([{ kind: "show", sessionId: SESSION, provider: "opencode-go", model: MODEL, usage: undefined }]);
+
+    release();
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]).toMatchObject({
+      kind: "show",
+      sessionId: SESSION,
+      provider: "opencode-go",
+      model: MODEL,
+      usage: { windows: [{ label: "5h", usedPercent: 12 }, { label: "weekly", usedPercent: 41 }, { label: "monthly", usedPercent: 7 }] },
+    });
+  });
+
+  it("publishes the windows an OpenAI Codex response's headers report, and sends no request to the usage endpoint", async () => {
+    const { writer, calls } = recordingSnapshot();
+    const h = harness({ http: answers({ chat: [{ status: 200, headers: CODEX_HEADERS, text: CODEX_SSE }] }) }, undefined, undefined, writer);
+    await h.engine.store.set("catalog.cache", CACHE);
+    await codexLogin(h.engine);
+
+    await collect(routeStep(h.router, step(0, CODEX_MODEL), spyNext()));
+    await settle();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      kind: "show",
+      sessionId: SESSION,
+      provider: "openai-codex",
+      model: CODEX_MODEL,
+      usage: { windows: [{ label: "5h", usedPercent: 23 }, { label: "7d", usedPercent: 41 }] },
+    });
+    expect(h.engine.recorded.http.filter((request) => request.url === CODEX_USAGE_URL)).toEqual([]);
+  });
+
+  it("publishes the new provider with no windows when a step on another provider completes before the earlier reading finishes", async () => {
+    const { monitor, time } = clockedMonitor();
+    const { writer, calls } = recordingSnapshot();
+    const h = harness({ http: answers({ usage: () => OPENCODE_OK, chat: [ok(), ok(), CHAT_XAI] }) }, undefined, monitor, writer);
+    await h.engine.store.set("catalog.cache", CACHE);
+    await signIn(h.engine);
+    await signIn(h.engine, "xai", "sentinel-xai");
+    remember(h.capture);
+    await collect(routeStep(h.router, step(0), spyNext()));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+
+    const release = holdUsage(h.engine);
+    time.at = 60_000;
+    await collect(routeStep(h.router, step(1), spyNext()));
+    await collect(routeStep(h.router, step(2, XAI_MODEL), spyNext()));
+    release();
+    await settle();
+
+    expect(calls).toHaveLength(4);
+    expect(calls.at(-1)).toEqual({ kind: "show", sessionId: SESSION, provider: "xai", model: XAI_MODEL, usage: undefined });
+  });
+
+  it("publishes a failed step with no windows, and a Claude main-loop step clears the snapshot", async () => {
+    const { writer, calls } = recordingSnapshot();
+    const h = harness(
+      { http: answers({ usage: () => OPENCODE_OK, chat: [ok(), { status: 401, text: '{"error":"bad key"}' }] }) },
+      undefined,
+      undefined,
+      writer,
+    );
+    await h.engine.store.set("catalog.cache", CACHE);
+    await signIn(h.engine);
+    remember(h.capture);
+    await collect(routeStep(h.router, step(0), spyNext()));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+
+    await collect(routeStep(h.router, step(1), spyNext()));
+    expect(calls.at(-1)).toEqual({ kind: "show", sessionId: SESSION, provider: "opencode-go", model: MODEL, usage: undefined });
+
+    await collect(routeStep(h.router, step(2, CLAUDE_MODEL), spyNext()));
+    expect(calls.at(-1)).toEqual({ kind: "clear", sessionId: SESSION });
+  });
+
+  it("shows the error line and publishes nothing when the session id cannot be read", async () => {
+    const { writer, calls } = recordingSnapshot();
+    const h = harness({ http: answers({ chat: [ok()] }) }, undefined, undefined, writer);
+    await h.engine.store.set("catalog.cache", CACHE);
+    await signIn(h.engine);
+    remember(h.capture);
+    h.engine.session.id = () => Promise.reject(new Error("no session"));
+
+    const { chunks } = await collect(routeStep(h.router, step(0), spyNext()));
+
+    expect(textOf(chunks)).not.toBe("");
+    expect(statusOf(h.engine)).toBe(`${MODEL} · OpenCode Go error: internal`);
+    expect(calls).toEqual([]);
+  });
+
+  it("leaves the step's answer, chunks and status line unchanged when the writer throws", async () => {
+    const broken: StatusSnapshotWriter = {
+      show: () => {
+        throw new Error("disk full");
+      },
+      clear: () => {
+        throw new Error("disk full");
+      },
+    };
+    const h = harness({ http: answers({ usage: () => OPENCODE_OK, chat: [ok()] }) }, undefined, undefined, broken);
+    await h.engine.store.set("catalog.cache", CACHE);
+    await signIn(h.engine);
+    remember(h.capture);
+
+    const { chunks, result } = await collect(routeStep(h.router, step(0), spyNext()));
+    expect(textOf(chunks)).toBe("ok");
+    expect(result).toMatchObject({ answer: "ok", stopReason: "end_turn" });
+    await vi.waitFor(() => expect(statusOf(h.engine)).toBe(OPENCODE_LINE));
+
+    await collect(routeStep(h.router, step(1, CLAUDE_MODEL), spyNext()));
+    expect(statusOf(h.engine)).toBe("");
+    expect(h.engine.recorded.ui.join("\n")).not.toContain("disk full");
+  });
+
+  it("leaves the snapshot alone on a routed or a Claude subagent step", async () => {
+    const { writer, calls } = recordingSnapshot();
+    const h = harness(
+      {
+        http: answers({ usage: () => OPENCODE_OK, chat: [ok(), ok()] }),
+        session: { id: SESSION, messages: [userText("Fix the notes")], agents: { "agent-1": [userText("Sub task")] } },
+      },
+      undefined,
+      undefined,
+      writer,
+    );
+    await h.engine.store.set("catalog.cache", CACHE);
+    await signIn(h.engine);
+    remember(h.capture);
+    await collect(routeStep(h.router, step(0), spyNext()));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    const before = [...calls];
+
+    await collect(routeStep(h.router, step(0, MODEL, { agentId: "agent-1" }), spyNext()));
+    await collect(routeStep(h.router, step(0, CLAUDE_MODEL, { agentId: "agent-2" }), spyNext()));
+    await settle();
+
+    expect(calls).toEqual(before);
   });
 });

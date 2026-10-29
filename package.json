@@ -1,6 +1,6 @@
 {
   "name": "nmg-router",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Claude Code mod that puts non-Claude models into the /model picker through the user's own provider logins.",
   "type": "module",
   "engines": {

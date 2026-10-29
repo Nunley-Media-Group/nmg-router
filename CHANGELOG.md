@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-29
+
+### Changed
+
+- Publish the selected routed model's plan usage for a custom statusLine command (#43)
+
 ## [0.13.0] - 2026-10-28
 
 ### Changed

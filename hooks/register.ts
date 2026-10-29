@@ -19,6 +19,7 @@ import { createRouter, type Router, type RouterHost } from "../src/routing/route
 import { createSessionTracker } from "../src/routing/session-tracker.ts";
 import { routeStep, routeStepFailed } from "../src/routing/turn-step.ts";
 import { createServices, type Services } from "../src/services.ts";
+import { createStatusSnapshotWriter } from "../src/usage/status-snapshot.ts";
 import { createUsageMonitor } from "../src/usage/monitor.ts";
 import { handleUsage, type UsageCommandDeps } from "../src/usage/usage-command.ts";
 
@@ -207,8 +208,17 @@ export const register: Register = (on, options) => {
   const hubFor = (host: HubHost): HubController => (hub ??= createHubController(servicesFor(host)));
 
   // The router and the compaction and permission deps share one host, the first one
-  // a hook built, as the router always has. They take a port, never `$`.
-  const routerFor = (host: RouterHost): Router => (router ??= createRouter(host, capture, tracker, view, usage));
+  // a hook built, as the router always has. They take a port, never `$`. The status
+  // snapshot writes through that same port, with the shared services' platform.
+  const routerFor = (host: RouterHost): Router =>
+    (router ??= createRouter(
+      host,
+      capture,
+      tracker,
+      view,
+      usage,
+      createStatusSnapshotWriter(host, () => servicesFor(host).platform()),
+    ));
   const compactDeps = (host: RouterHost): CompactDeps => ({
     router: routerFor(host),
     tracker,
