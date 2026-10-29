@@ -32,7 +32,8 @@ import { readPluginVersion } from "../version.ts";
 import type { ComposeCapture } from "./compose-capture.ts";
 import { MAIN_LOOP, createSessionTracker, type SessionTracker } from "./session-tracker.ts";
 import { speedOf, withSpeed, type SpeedRecord } from "./metrics.ts";
-import { errorStatusText, statusText, thinkingOf } from "./status.ts";
+import { renderStatus, thinkingOf, type RoutedStatus, type Thinking } from "./status.ts";
+import { createUsageMonitor, type UsageMonitor } from "../usage/monitor.ts";
 
 // Answers a routed model's turn step through the provider's wire. It sends one
 // request, streams the reply back as engine chunks, and answers any failure with
@@ -216,6 +217,8 @@ function toRouted(name: string, error: unknown): RoutedError {
 // What a send needs from the host besides the request. Read after the request is checked.
 type SendContext = {
   readonly auth: Auth | undefined;
+  // The active account the auth belongs to. Undefined for a provider with no login.
+  readonly account: string | undefined;
   readonly platform: string;
   readonly sessionId: string;
   readonly pluginVersion: string;
@@ -228,6 +231,8 @@ type Reply = {
   readonly aborted: boolean;
   readonly sentAt: number;
   readonly firstAt: number | undefined;
+  // The response's headers, lowercase. A usage report may come from them.
+  readonly headers: Readonly<Record<string, string>>;
 };
 
 export function createRouter(
@@ -235,6 +240,7 @@ export function createRouter(
   capture: ComposeCapture,
   tracker: SessionTracker = createSessionTracker(),
   view: RoutedView = createRoutedView(),
+  monitor: UsageMonitor = createUsageMonitor(),
 ): Router {
   const services = createServices(host);
   const { catalog, credentials } = services;
@@ -246,8 +252,8 @@ export function createRouter(
   let loaded: Promise<void> | undefined;
   let version: Promise<string> | undefined;
   const steps = new Map<string, Progress>();
-  // True while the status line shows a routed main-loop step's text.
-  let statusShown = false;
+  // What the status line shows: a routed step's state, until a Claude main-loop step clears it.
+  let shown: RoutedStatus | undefined;
 
   async function providerOf(model: string): Promise<ProviderPlugin | undefined> {
     const parsed = parseModelId(model);
@@ -257,13 +263,16 @@ export function createRouter(
     return catalog.providers().find((plugin) => plugin.identity.id === parsed.provider);
   }
 
-  async function credentialFor(plugin: ProviderPlugin): Promise<Auth | undefined> {
-    if (plugin.login.kind === "none") return undefined;
+  // The active account's credential and the account it belongs to. A login-free provider has neither.
+  async function credentialFor(
+    plugin: ProviderPlugin,
+  ): Promise<{ readonly auth: Auth | undefined; readonly account: string | undefined }> {
+    if (plugin.login.kind === "none") return { auth: undefined, account: undefined };
     const account = await catalog.activeAccount(plugin.identity.id);
     if (account === undefined) throw classify(plugin.identity.name, { kind: "named", error: "not_logged_in" });
     const auth = await resolveCredential({ http: host.http, credentials }, plugin, account);
     if (auth === undefined) throw classify(plugin.identity.name, { kind: "named", error: "not_logged_in" });
-    return auth;
+    return { auth, account };
   }
 
   // The wire and base URL a model's requests use: the catalog's, else the provider's default.
@@ -280,11 +289,11 @@ export function createRouter(
   // Checks the request, then reads what the send needs, in that order.
   async function contextFor(plugin: ProviderPlugin, model: string, resolved: ResolvedWire): Promise<SendContext> {
     checkRequest({ provider: plugin.identity.id, model, baseUrl: resolved.baseUrl });
-    const auth = await credentialFor(plugin);
+    const { auth, account } = await credentialFor(plugin);
     const platform = await services.platform();
     const sessionId = await host.session.id();
     const pluginVersion = await (version ??= readPluginVersion(host.fs, host.pluginRoot()));
-    return { auth, platform, sessionId, pluginVersion };
+    return { auth, account, platform, sessionId, pluginVersion };
   }
 
   async function systemFor(model: string): Promise<string> {
@@ -353,7 +362,7 @@ export function createRouter(
       if (chunk.kind === "tool") tracker.recordToolId(chunk.id);
     };
     for await (const piece of response.body) {
-      if (signal.aborted) return { tally: tallied, aborted: true, sentAt, firstAt: gate.firstAt };
+      if (signal.aborted) return { tally: tallied, aborted: true, sentAt, firstAt: gate.firstAt, headers: response.headers };
       for (const event of parser.push(piece)) {
         for (const chunk of gate.accept(event)) {
           take(chunk);
@@ -362,7 +371,7 @@ export function createRouter(
         }
       }
     }
-    if (signal.aborted) return { tally: tallied, aborted: true, sentAt, firstAt: gate.firstAt };
+    if (signal.aborted) return { tally: tallied, aborted: true, sentAt, firstAt: gate.firstAt, headers: response.headers };
     for (const event of parser.end()) {
       for (const chunk of gate.accept(event)) {
         take(chunk);
@@ -371,7 +380,47 @@ export function createRouter(
       }
     }
     gate.finish();
-    return { tally: tallied, aborted: false, sentAt, firstAt: gate.firstAt };
+    return { tally: tallied, aborted: false, sentAt, firstAt: gate.firstAt, headers: response.headers };
+  }
+
+  // Sets the status line to a state and draws it.
+  function show(state: RoutedStatus): void {
+    shown = state;
+    host.ui.status(renderStatus(state));
+  }
+
+  // Shows a routed main-loop step's answer. Its usage is the step's own headers when they carry it, else the provider's
+  // latest good report. A step whose headers carry none starts a reading in the background, which never holds the answer.
+  function showStep(
+    plugin: ProviderPlugin,
+    model: string,
+    thinking: Thinking,
+    context: SendContext,
+    headers: Readonly<Record<string, string>>,
+  ): void {
+    const id = plugin.identity.id;
+    const { account } = context;
+    const source = plugin.usage;
+    const fromHeaders = source?.fromHeaders?.(headers);
+    if (fromHeaders !== undefined) monitor.record(id, account, fromHeaders);
+    show({ provider: { id, name: plugin.identity.name }, account, model, thinking, usage: monitor.latest(id, account) });
+    if (source === undefined || fromHeaders !== undefined) return;
+    void monitor
+      .read(id, account, () => source.read(host, { platform: context.platform, auth: context.auth }))
+      .then((outcome) => {
+        if (outcome.kind !== "ok") host.ui.log(`${plugin.identity.name} usage unavailable: ${outcome.kind}`, { to: "debug" });
+        redraw(id, account);
+      })
+      .catch(() => undefined);
+  }
+
+  // A reading that settles redraws the line only while it still shows the same provider and account, with no error,
+  // and only when its good report changed. A failed reading leaves the line as it is.
+  function redraw(provider: string, account: string | undefined): void {
+    if (shown === undefined || shown.error !== undefined || shown.provider.id !== provider || shown.account !== account) return;
+    const usage = monitor.latest(provider, account);
+    if (usage === shown.usage) return;
+    show({ ...shown, usage });
   }
 
   // The answer for a failed step: its message as text, then an end of turn. The
@@ -387,8 +436,7 @@ export function createRouter(
     if (signal.aborted) return { turnId: e.turnId, index: e.index, answer: "", toolUses: [], stopReason: "end_turn", usage: null };
     const routed = toRouted(name, error);
     if (e.agentId === undefined) {
-      host.ui.status(errorStatusText(e.model, name, routed.kind));
-      statusShown = true;
+      show({ provider: { id: parseModelId(e.model)?.provider ?? e.model, name }, account: undefined, model: e.model, error: routed.kind });
     }
     yield { kind: "text", index: blocks, text: routed.message };
     yield { kind: "stop", stopReason: "end_turn", usage: null };
@@ -444,10 +492,7 @@ export function createRouter(
     if (reply.aborted) return resultOf(e, reply.tally);
 
     // Only the main loop moves the status line; a subagent's steps leave it as it is.
-    if (e.agentId === undefined) {
-      host.ui.status(statusText(e.model, thinkingOf(supported, effort)));
-      statusShown = true;
-    }
+    if (e.agentId === undefined) showStep(plugin, e.model, thinkingOf(supported, effort), context, reply.headers);
     const usage = reply.tally.stop?.usage;
     if (usage) tracker.recordUsage(e.agentId ?? MAIN_LOOP, usage);
     await remember(
@@ -467,8 +512,8 @@ export function createRouter(
     },
 
     claudeStep(e) {
-      if (e.agentId !== undefined || !statusShown) return;
-      statusShown = false;
+      if (e.agentId !== undefined || shown === undefined) return;
+      shown = undefined;
       host.ui.status(undefined);
     },
 

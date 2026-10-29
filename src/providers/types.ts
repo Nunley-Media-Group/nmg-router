@@ -1,4 +1,5 @@
 import type { HostPort } from "../host.ts";
+import type { UsageOutcome, UsageReport } from "../usage/report.ts";
 
 // The shapes every provider plugin, catalog and login flow shares. This file
 // holds types only, so nothing here reaches a host call or a store.
@@ -82,6 +83,13 @@ export type CapabilitySource = {
   read(deps: HttpDeps, context: ProviderContext): Promise<CapabilityIndex | undefined>;
 };
 
+// A provider's plan usage: read from its own endpoint with the active credential, and,
+// when a routed response carries it, mapped from that response's headers (lowercase names).
+export type UsageSource = {
+  read(deps: HttpDeps, context: ProviderContext): Promise<UsageOutcome>;
+  fromHeaders?(headers: Readonly<Record<string, string>>): UsageReport | undefined;
+};
+
 export type ResolvedWire = { readonly wire: WireFormat; readonly baseUrl: string };
 
 // The bundled metadata's wire, when present, is passed in as the second argument.
@@ -97,6 +105,8 @@ export type ProviderPlugin = {
   readonly requestModel?: (model: string) => string;
   // Capability data the model list leaves out, such as image input.
   readonly capabilities?: CapabilitySource;
+  // Plan usage the provider meters, shown in the status line and `/usage`.
+  readonly usage?: UsageSource;
 };
 
 export type CatalogModel = {
