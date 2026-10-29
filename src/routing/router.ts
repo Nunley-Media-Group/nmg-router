@@ -34,6 +34,7 @@ import { MAIN_LOOP, createSessionTracker, type SessionTracker } from "./session-
 import { speedOf, withSpeed, type SpeedRecord } from "./metrics.ts";
 import { renderStatus, thinkingOf, type RoutedStatus, type Thinking } from "./status.ts";
 import { createUsageMonitor, type UsageMonitor } from "../usage/monitor.ts";
+import type { ClaudeRateLimit } from "../usage/report.ts";
 import type { StatusSnapshotWriter } from "../usage/status-snapshot.ts";
 
 // Answers a routed model's turn step through the provider's wire. It sends one
@@ -59,6 +60,8 @@ export type RouterHost = HostPort & {
     cwd(): Promise<string>;
     // Resolves an opaque handle or null. The mod reads only whether it is null.
     authorize(): Promise<unknown>;
+    // Claude's rate-limit windows. Only these figures are read; no credential.
+    usage(): Promise<{ readonly rateLimits: readonly ClaudeRateLimit[] }>;
   };
   readonly model: { classify(text: string, labels: readonly string[]): Promise<string | undefined> };
   readonly config: { list(): Promise<readonly { readonly key: string; readonly value: unknown }[]> };

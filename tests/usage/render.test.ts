@@ -40,18 +40,18 @@ describe("renderUsageEntries", () => {
       ],
       NOW,
     );
-    expect(text).toBe(["Provider plan usage", "OpenAI Codex", "  5h 23% · resets in 2h 10m", "  7d 41%"].join("\n"));
+    expect(text).toBe(["Plan usage", "OpenAI Codex", "  5h 23% · resets in 2h 10m", "  7d 41%"].join("\n"));
   });
 
   it("says no reading is available for a provider without a usage source", () => {
     expect(renderUsageEntries([{ name: "xAI", reading: "none" }], NOW)).toBe(
-      ["Provider plan usage", "xAI", "  No usage reading available"].join("\n"),
+      ["Plan usage", "xAI", "  No usage reading available"].join("\n"),
     );
   });
 
   it("says why a reading could not be read, by its failure kind", () => {
     expect(renderUsageEntries([{ name: "OpenCode Go", reading: { kind: "offline" } }], NOW)).toBe(
-      ["Provider plan usage", "OpenCode Go", "  Usage could not be read: offline"].join("\n"),
+      ["Plan usage", "OpenCode Go", "  Usage could not be read: offline"].join("\n"),
     );
   });
 

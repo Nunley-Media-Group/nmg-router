@@ -6,11 +6,12 @@ import type { CredentialStore } from "../credentials/store.ts";
 import { LoginError } from "../errors/errors.ts";
 import type { UsageMonitor } from "./monitor.ts";
 import { renderUsageEntries, type UsageEntry } from "./render.ts";
-import type { UsageFailureKind, UsageOutcome } from "./report.ts";
+import { claudeUsageReport, type ClaudeRateLimit, type UsageFailureKind, type UsageOutcome } from "./report.ts";
 
-// The `/usage` hook's body. Claude Code's own view runs first, unchanged. Then each
-// enabled provider the person is logged in to gets an entry, read through the shared
-// monitor with the active account's credential. One provider's failure is its own entry.
+// The `/usage` hook's body. Claude Code's own view runs first, unchanged. Then Claude's
+// rate-limit windows get an entry, and so does each enabled provider the person is logged
+// in to, read through the shared monitor with the active account's credential. One
+// provider's failure is its own entry.
 // Claude Code's `/usage` is a panel: the host drops a hook's answer after `next(e)`, so
 // the entries go to the transcript as rows of their own, and the built-in result passes through.
 
@@ -21,6 +22,8 @@ export type UsageCommandDeps = {
   readonly platform: () => Promise<string>;
   readonly monitor: UsageMonitor;
   readonly now: () => number;
+  // Claude's rate-limit windows, only the figures `$.session.usage()` answers. No credential is read.
+  readonly claudeRateLimits: () => Promise<readonly ClaudeRateLimit[]>;
   // Appends one row to the transcript.
   readonly log: (text: string) => void;
 };
@@ -67,15 +70,27 @@ async function readingOf(deps: UsageCommandDeps, plugin: ProviderPlugin): Promis
   }
 }
 
-// The entries, one transcript row per line, since a row draws one line. With no provider logged in, nothing is added. A failed listing adds nothing.
+// Claude's entry. A failed or empty read has no reading, and never hides the provider entries.
+async function claudeEntry(deps: UsageCommandDeps): Promise<UsageEntry> {
+  try {
+    const report = claudeUsageReport(await deps.claudeRateLimits());
+    return { name: "Claude", reading: report.windows.length > 0 ? { kind: "ok", report } : "none" };
+  } catch {
+    return { name: "Claude", reading: "none" };
+  }
+}
+
+// The entries, one transcript row per line, since a row draws one line: Claude's first, then
+// each logged-in provider's. With no provider logged in, nothing is added and Claude's usage is not read. A failed listing adds nothing.
 async function logUsage(deps: UsageCommandDeps): Promise<void> {
   try {
     const rows = await loggedInProviders(deps);
     if (rows.length === 0) return;
-    const entries: UsageEntry[] = await Promise.all(
-      rows.map(async (plugin) => ({ name: plugin.identity.name, reading: await readingOf(deps, plugin) })),
-    );
-    for (const line of renderUsageEntries(entries, deps.now()).split("\n")) deps.log(line);
+    const [claude, providers] = await Promise.all([
+      claudeEntry(deps),
+      Promise.all(rows.map(async (plugin): Promise<UsageEntry> => ({ name: plugin.identity.name, reading: await readingOf(deps, plugin) }))),
+    ]);
+    for (const line of renderUsageEntries([claude, ...providers], deps.now()).split("\n")) deps.log(line);
   } catch {
     // Claude Code's own view still stands.
   }

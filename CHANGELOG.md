@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-29
+
+### Fixed
+
+- List Claude's usage alongside the logged-in providers in /usage (#44)
+
 ## [0.14.0] - 2026-10-29
 
 ### Changed

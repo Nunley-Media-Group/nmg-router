@@ -147,6 +147,7 @@ function hostPort($: EngineInterface): RouterHost {
       model: () => $.session.model(),
       cwd: () => $.session.cwd(),
       authorize: () => $.session.authorize(),
+      usage: () => $.session.usage(),
     },
     settings: { read: () => $.settings.read({ source: "user" }) },
     model: { classify: (text, labels) => $.model.classify(text, labels) },
@@ -244,7 +245,7 @@ export const register: Register = (on, options) => {
     askPerson,
   });
   // The login services the hub shares, and the monitor the router shares.
-  const usageDeps = (host: HostPort): UsageCommandDeps => {
+  const usageDeps = (host: RouterHost): UsageCommandDeps => {
     const services = servicesFor(host);
     return {
       catalog: services.catalog,
@@ -253,6 +254,8 @@ export const register: Register = (on, options) => {
       platform: services.platform,
       monitor: usage,
       now: Date.now,
+      // Only the rate-limit figures leave the session's usage.
+      claudeRateLimits: async () => (await host.session.usage()).rateLimits,
       log: (text) => host.ui.log(text),
     };
   };
@@ -360,7 +363,7 @@ export const register: Register = (on, options) => {
     return handleModelCommand(host, e, next, hubFor(host), rowLoaded);
   });
 
-  // `/usage` shows Claude Code's own view, then transcript rows with one entry per provider the person is logged in to. A failed hook still runs that view.
+  // `/usage` shows Claude Code's own view, then transcript rows with Claude's entry and one per provider the person is logged in to. A failed hook still runs that view.
   // In the catch `next` is replay-safe: after the hook called it (an interrupted panel rejects), `next(e)` passes that
   // settlement on without running `/usage` again; only a hook that failed before calling it runs the built-in view here.
   on("command.run", { command: "usage" }, ($, e, next) => handleUsage(usageDeps(hostPort($)), e, next)).catch((_, e, next) =>
