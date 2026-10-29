@@ -32,9 +32,9 @@ export type UsageEntry = {
   readonly reading: UsageOutcome | "none";
 };
 
-// The `/usage` text after the built-in view: a heading, then each provider's name and its indented lines.
+// The `/usage` text after the built-in view: a heading, then each entry's name and its indented lines.
 export function renderUsageEntries(entries: readonly UsageEntry[], now: number): string {
-  const lines = ["Provider plan usage"];
+  const lines = ["Plan usage"];
   for (const entry of entries) {
     lines.push(entry.name, ...readingLines(entry.reading, now));
   }

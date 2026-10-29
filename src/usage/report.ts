@@ -61,3 +61,29 @@ export function failureOf(outcome: Exclude<HttpOutcome, { readonly kind: "ok" }>
 export function recordOf(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
+
+// Claude's rate-limit windows, as `$.session.usage().rateLimits` gives them, read as a report.
+// A window whose percent is not a finite number is left out.
+export type ClaudeRateLimit = { readonly kind: string; readonly percentUsed: number; readonly resetsAt?: string };
+
+const CLAUDE_WINDOW_LABELS: ReadonlyMap<string, string> = new Map([
+  ["five_hour", "5h"],
+  ["seven_day", "7d"],
+  ["spend_limit", "spend"],
+]);
+
+export function claudeUsageReport(rateLimits: readonly ClaudeRateLimit[]): UsageReport {
+  const windows: UsageWindow[] = [];
+  for (const limit of rateLimits) {
+    const usedPercent = percentOf(limit.percentUsed);
+    if (usedPercent === undefined) continue;
+    const resetsAt = epochOf(limit.resetsAt);
+    windows.push({
+      id: limit.kind,
+      label: CLAUDE_WINDOW_LABELS.get(limit.kind) ?? limit.kind,
+      usedPercent,
+      ...(resetsAt === undefined ? {} : { resetsAt }),
+    });
+  }
+  return { windows };
+}

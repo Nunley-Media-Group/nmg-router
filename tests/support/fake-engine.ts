@@ -9,6 +9,7 @@ import type {
   ProcessSpawnResult,
   PromptComposeResult,
   SessionCompactArgs,
+  SessionRateLimit,
   ToolInfo,
 } from "claude-code";
 import type { ApiMessageInput } from "../../src/translate/messages.ts";
@@ -47,6 +48,8 @@ export type FakeOptions = {
   // The live context window's tokens and size, as `$.session.usage()` answers them.
   readonly contextTokens?: number;
   readonly contextWindow?: number;
+  // Claude's rate-limit windows, as `$.session.usage()` answers them, or an Error the call rejects with.
+  readonly rateLimits?: readonly SessionRateLimit[] | Error;
   // What `$.ui.ask` answers: a label, an Error it rejects with (a dismissed
   // dialog, or nobody to ask), or a function of the question giving either.
   readonly ask?: string | Error | ((question: string) => string | Error | Promise<string | Error>);
@@ -119,11 +122,12 @@ export type Recorded = {
   // Every process run and file write, in the order the code made them.
   readonly events: string[];
   // Each `$.session.compact` call's arguments, the `$.model.classify` calls and their
-  // text and labels, the delays `$.clock.after` was given, and each `$.session.authorize` call.
+  // text and labels, the delays `$.clock.after` was given, and each `$.session.authorize` and `$.session.usage` call.
   readonly compacts: (SessionCompactArgs | undefined)[];
   readonly classifications: { readonly text: string; readonly labels: readonly string[] }[];
   readonly timers: number[];
   authorizes: number;
+  usages: number;
   coreSummaries: number;
   // Each `$.ui.ask` call's question and options, in the order asked.
   readonly asks: { readonly question: string; readonly options: unknown }[];
@@ -201,6 +205,7 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
     classifications: [],
     timers: [],
     authorizes: 0,
+    usages: 0,
     coreSummaries: 0,
     asks: [],
   };
@@ -380,11 +385,15 @@ export function fakeEngine(options: FakeOptions): FakeEngine {
         recorded.coreSummaries += 1;
         return options.compact ?? { messages: [] };
       },
-      usage: async () => ({
-        startedAt: 0,
-        context: { window: options.contextWindow ?? 200_000, tokens: options.contextTokens ?? 0 },
-        rateLimits: [],
-      }),
+      usage: async () => {
+        recorded.usages += 1;
+        if (options.rateLimits instanceof Error) throw options.rateLimits;
+        return {
+          startedAt: 0,
+          context: { window: options.contextWindow ?? 200_000, tokens: options.contextTokens ?? 0 },
+          rateLimits: [...(options.rateLimits ?? [])],
+        };
+      },
     },
     model: {
       classify: async (text: string, labels: readonly string[]) => {

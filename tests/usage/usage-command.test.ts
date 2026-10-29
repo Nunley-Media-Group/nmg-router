@@ -55,9 +55,18 @@ function depsOf(engine: FakeEngine, monitor = createUsageMonitor(() => NOW)): Us
     platform: services.platform,
     monitor,
     now: () => NOW,
+    claudeRateLimits: async () => (await engine.session.usage()).rateLimits,
     log: (text) => engine.ui.log(text),
   };
 }
+
+// Claude's windows: five_hour 23.5% used, resetting 2h 10m after NOW, and seven_day 41%.
+const CLAUDE_LIMITS = [
+  { kind: "five_hour", percentUsed: 23.5, resetsAt: new Date(NOW + (2 * 60 + 10) * 60_000).toISOString() },
+  { kind: "seven_day", percentUsed: 41 },
+];
+
+const OPENCODE_ROWS = ["OpenCode Go", "  5h 12% · resets in 1h 43m", "  weekly 41% · resets in 8d 21h", "  monthly 7% · resets in 29d 21h"];
 
 // Claude Code's `/usage` as the host runs it: a panel that prints no text, so its result is only the run's `ref`.
 const PANEL = { ref: 7 };
@@ -82,7 +91,9 @@ describe("/usage entries", () => {
     expect(result).toBe(PANEL);
     // One row per line: a transcript row draws a single line.
     expect(engine.recorded.ui).toEqual([
-      "Provider plan usage",
+      "Plan usage",
+      "Claude",
+      "  No usage reading available",
       "OpenAI Codex",
       "  5h 23% · resets in 2h 10m",
       "  7d 41% · resets in 5d 21h",
@@ -105,7 +116,7 @@ describe("/usage entries", () => {
     await expect(handleUsage(depsOf(engine), INPUT, next)).rejects.toBe(interrupted);
 
     expect(next).toHaveBeenCalledTimes(1);
-    expect(engine.recorded.ui.filter((line) => line === "Provider plan usage")).toHaveLength(1);
+    expect(engine.recorded.ui.filter((line) => line === "Plan usage")).toHaveLength(1);
     expect(engine.recorded.ui.join("\n")).toContain("OpenCode Go\n  5h 12% · resets in 1h 43m");
   });
 
@@ -131,6 +142,41 @@ describe("/usage entries", () => {
     expect(result).toBe(built);
     expect(engine.recorded.ui).toEqual([]);
     expect(engine.recorded.http).toEqual([]);
+    // Claude's usage is not read either.
+    expect(engine.recorded.usages).toBe(0);
+  });
+
+  it("lists Claude's windows first under Plan usage, then the logged-in provider's", async () => {
+    const engine = fakeEngine({ platform: "linux", http: usageAnswers({ opencode: OPENCODE_OK }), rateLimits: CLAUDE_LIMITS });
+    await signIn(engine, "opencode-go", "sentinel-opencode");
+    const next = vi.fn(async () => PANEL);
+
+    const result = await handleUsage(depsOf(engine), INPUT, next);
+
+    expect(next).toHaveBeenCalledWith(INPUT);
+    expect(result).toBe(PANEL);
+    expect(engine.recorded.ui).toEqual(["Plan usage", "Claude", "  5h 24% · resets in 2h 10m", "  7d 41%", ...OPENCODE_ROWS]);
+  });
+
+  it("says Claude has no reading, and keeps the provider's entry, when Claude reports no windows", async () => {
+    const engine = fakeEngine({ platform: "linux", http: usageAnswers({ opencode: OPENCODE_OK }), rateLimits: [] });
+    await signIn(engine, "opencode-go", "sentinel-opencode");
+
+    await handleUsage(depsOf(engine), INPUT, panel);
+
+    expect(engine.recorded.ui).toEqual(["Plan usage", "Claude", "  No usage reading available", ...OPENCODE_ROWS]);
+  });
+
+  it("says Claude has no reading, and keeps the provider's entry, when Claude's usage cannot be read", async () => {
+    const engine = fakeEngine({ platform: "linux", http: usageAnswers({ opencode: OPENCODE_OK }), rateLimits: new Error("no usage") });
+    await signIn(engine, "opencode-go", "sentinel-opencode");
+    const next = vi.fn(async () => PANEL);
+
+    const result = await handleUsage(depsOf(engine), INPUT, next);
+
+    expect(result).toBe(PANEL);
+    expect(engine.recorded.usages).toBe(1);
+    expect(engine.recorded.ui).toEqual(["Plan usage", "Claude", "  No usage reading available", ...OPENCODE_ROWS]);
   });
 
   it("reads a provider within the throttle from the shared monitor, sending one usage request for two /usage runs", async () => {
